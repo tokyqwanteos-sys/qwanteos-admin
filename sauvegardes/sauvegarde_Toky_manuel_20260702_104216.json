@@ -1,0 +1,27 @@
+{
+    "agents": [
+        {
+            "Nom": "Isaïa",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Elizara",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Zara",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Ny Haingo",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Toky",
+            "Poste": "Setup Leader"
+        }
+    ],
+    "planning": {},
+    "heures": {},
+    "donnees_cloud_centralisees": []
+}
