@@ -1,0 +1,34 @@
+{
+    "agents": [
+        {
+            "Nom": "Isaïa",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Elizara",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Ny Haingo",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Vanja",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Toky",
+            "Poste": "Setup Leader"
+        }
+    ],
+    "planning": {},
+    "heures": {},
+    "donnees_cloud_centralisees": [
+        {
+            "Date": "23/06/2026",
+            "Type_Travail": " PREMIUM",
+            "Statut": "Fin",
+            "Duree_Total": "0:45:19",
+            "Remarques": NaN,
+            "Source_Feuille": "Toky",
+            "Date_Parsed": 

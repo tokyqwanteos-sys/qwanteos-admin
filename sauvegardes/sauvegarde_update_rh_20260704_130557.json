@@ -1,0 +1,19 @@
+{
+    "agents": [
+        {
+            "Nom": "Alice Smith",
+            "Poste": "Team Leader"
+        },
+        {
+            "Nom": "Isaïa",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Elizara",
+            "Poste": "Setup Operator"
+        }
+    ],
+    "planning": {},
+    "heures": {},
+    "donnees_cloud_centralisees": []
+}
