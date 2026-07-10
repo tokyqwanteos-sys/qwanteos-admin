@@ -1,7 +1,7 @@
 {
-    "timestamp": "2026-07-10T15:22:15.455847",
+    "timestamp": "2026-07-10T15:22:00.492377",
     "utilisateur": "Test",
-    "type_evenement": "manuel",
+    "type_evenement": "update_planning",
     "agents": [
         {
             "Nom": "Isaïa",
@@ -56,8 +56,7 @@
         },
         "2026-07-11": {
             "Ny Haingo": "OFF",
-            "Toky": "OFF",
-            "Elizara": "OFF"
+            "Toky": "OFF"
         },
         "2026-07-12": {
             "Toky": "Congé",

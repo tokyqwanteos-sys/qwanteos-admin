@@ -1,1 +1,6 @@
-{"user_actif": "Toky", "authentifie": true, "role": "admin"}
+{
+    "user_actif": "Test",
+    "authentifie": true,
+    "role": "admin",
+    "timestamp": "2026-07-10T15:15:33.028723"
+}

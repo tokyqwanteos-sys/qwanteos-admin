@@ -1,0 +1,33 @@
+{
+    "timestamp": "2026-07-10T15:15:56.956040",
+    "utilisateur": "Test",
+    "type_evenement": "update_rh",
+    "agents": [
+        {
+            "Nom": "Isaïa",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Elizara",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Toky",
+            "Poste": "Setup Leader"
+        }
+    ],
+    "planning": {},
+    "heures": {},
+    "donnees_cloud_centralisees": [],
+    "taches_operateur": {},
+    "taches_en_cours": [],
+    "couleurs": {
+        "Travail": "#2E7D32",
+        "OFF": "#757575",
+        "Congé": "#8D6E63",
+        "Maladie": "#C62828",
+        "Formation": "#1565C0"
+    },
+    "task_id_counter": 0,
+    "show_completed_tasks": true
+}

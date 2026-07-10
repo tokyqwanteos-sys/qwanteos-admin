@@ -1,7 +1,7 @@
 {
-    "timestamp": "2026-07-10T15:22:15.455847",
+    "timestamp": "2026-07-10T15:18:29.986110",
     "utilisateur": "Test",
-    "type_evenement": "manuel",
+    "type_evenement": "update_planning",
     "agents": [
         {
             "Nom": "Isaïa",
@@ -29,42 +29,13 @@
             "Toky": "OFF"
         },
         "2026-07-05": {
-            "Toky": "OFF",
-            "Ny Haingo": "Congé",
-            "Vanja": "OFF"
+            "Toky": "Travail"
         },
         "2026-07-02": {
-            "Toky": "Travail",
-            "Ny Haingo": "OFF"
+            "Toky": "Travail"
         },
         "2026-07-04": {
-            "Toky": "Travail",
-            "Ny Haingo": "OFF",
-            "Elizara": "OFF"
-        },
-        "2026-07-06": {
-            "Vanja": "OFF",
-            "Ny Haingo": "Congé"
-        },
-        "2026-07-07": {
-            "Vanja": "OFF",
-            "Toky": "OFF"
-        },
-        "2026-07-08": {
-            "Ny Haingo": "OFF",
-            "Isaïa": "OFF"
-        },
-        "2026-07-11": {
-            "Ny Haingo": "OFF",
-            "Toky": "OFF",
-            "Elizara": "OFF"
-        },
-        "2026-07-12": {
-            "Toky": "Congé",
-            "Isaïa": "OFF"
-        },
-        "2026-07-10": {
-            "Elizara": "OFF"
+            "Toky": "Travail"
         }
     },
     "heures": {

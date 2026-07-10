@@ -1,7 +1,7 @@
 {
-    "timestamp": "2026-07-10T15:22:15.455847",
+    "timestamp": "2026-07-10T15:22:04.103292",
     "utilisateur": "Test",
-    "type_evenement": "manuel",
+    "type_evenement": "update_planning",
     "agents": [
         {
             "Nom": "Isaïa",

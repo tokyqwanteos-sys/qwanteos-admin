@@ -74,10 +74,7 @@ def log_connection_attempt(username, success, ip="127.0.0.1"):
         
         logs.append(log_entry)
         
-        # Garder seulement les 1000 derniers logs
-        if len(logs) > 1000:
-            logs = logs[-1000:]
-        
+        # Garder tous les logs sans limite
         with open(log_file, "w", encoding="utf-8") as f:
             json.dump(logs, f, ensure_ascii=False, indent=4)
     except:
@@ -457,6 +454,64 @@ st.markdown("""
             padding: 30px;
         }
     }
+
+    /* Style pour les tâches en cours */
+    .task-card {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        padding: 15px;
+        margin: 8px 0;
+        border-left: 4px solid #4CAF50;
+        transition: all 0.3s ease;
+    }
+    .task-card:hover {
+        transform: translateX(5px);
+        background: rgba(255, 255, 255, 0.08);
+    }
+    .task-card.paused {
+        border-left-color: #FFA726;
+    }
+    .task-card.completed {
+        border-left-color: #4CAF50;
+        opacity: 0.8;
+    }
+    .task-timer {
+        font-size: 28px;
+        font-weight: bold;
+        font-family: monospace;
+        color: #4CAF50;
+    }
+    .task-timer.paused {
+        color: #FFA726;
+    }
+    .task-status {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+    .task-status.running {
+        background: rgba(76, 175, 80, 0.2);
+        color: #4CAF50;
+    }
+    .task-status.paused {
+        background: rgba(255, 167, 38, 0.2);
+        color: #FFA726;
+    }
+    .task-status.completed {
+        background: rgba(76, 175, 80, 0.2);
+        color: #4CAF50;
+    }
+    
+    /* Animation pour le chronomètre */
+    @keyframes timerPulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.8; }
+    }
+    .timer-running {
+        animation: timerPulse 1s ease-in-out infinite;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -467,10 +522,23 @@ def sauvegarder_etat_connexion(utilisateur, authentifie, role="operateur"):
     try:
         if not os.path.exists("sauvegardes"):
             os.makedirs("sauvegardes")
+        
+        # Sauvegarder l'état de connexion
         with open(SESSION_FILE, "w", encoding="utf-8") as f:
-            json.dump({"user_actif": utilisateur, "authentifie": authentifie, "role": role}, f)
-    except Exception:
-        pass
+            json.dump({
+                "user_actif": utilisateur, 
+                "authentifie": authentifie, 
+                "role": role,
+                "timestamp": datetime.now().isoformat()
+            }, f, ensure_ascii=False, indent=4)
+        
+        # Si l'utilisateur est authentifié, sauvegarder toutes les données
+        if authentifie and utilisateur:
+            executer_sauvegarde_auto("connexion", utilisateur)
+        
+        return True
+    except Exception as e:
+        return False
 
 def charger_etat_connexion():
     if os.path.exists(SESSION_FILE):
@@ -486,20 +554,31 @@ def executer_sauvegarde_auto(type_evenement, utilisateur):
     try:
         if not os.path.exists("sauvegardes"):
             os.makedirs("sauvegardes")
-            
+        
+        # Récupérer TOUTES les données de session
         donnees = {
+            "timestamp": datetime.now().isoformat(),
+            "utilisateur": utilisateur,
+            "type_evenement": type_evenement,
             "agents": st.session_state.get("agents", []),
             "planning": st.session_state.get("planning", {}),
             "heures": st.session_state.get("heures", {}),
-            "donnees_cloud_centralisees": st.session_state.get("donnees_cloud_centralisees", [])
+            "donnees_cloud_centralisees": st.session_state.get("donnees_cloud_centralisees", []),
+            "taches_operateur": st.session_state.get("taches_operateur", {}),
+            "taches_en_cours": st.session_state.get("taches_en_cours", []),
+            "couleurs": st.session_state.get("couleurs", {}),
+            "task_id_counter": st.session_state.get("task_id_counter", 0),
+            "show_completed_tasks": st.session_state.get("show_completed_tasks", True)
         }
         
-        horodatage = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Sauvegarde avec horodatage - TOUTES les sauvegardes sont conservées
+        horodatage = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         nom_fichier = f"sauvegardes/sauvegarde_{type_evenement}_{horodatage}.json"
         
         with open(nom_fichier, "w", encoding="utf-8") as f:
             json.dump(donnees, f, ensure_ascii=False, indent=4)
-            
+        
+        # Sauvegarde "last" - toujours écrasée
         nom_fichier_fixe = "sauvegardes/sauvegarde_last.json"
         with open(nom_fichier_fixe, "w", encoding="utf-8") as f:
             json.dump(donnees, f, ensure_ascii=False, indent=4)
@@ -521,17 +600,34 @@ def charger_derniere_sauvegarde():
             fichiers = glob.glob("sauvegardes/sauvegarde_*.json")
             if not fichiers:
                 return False
+            # Exclure les fichiers "last"
+            fichiers = [f for f in fichiers if "last" not in f]
+            if not fichiers:
+                return False
             dernier_fichier = max(fichiers, key=os.path.getmtime)
         
         with open(dernier_fichier, "r", encoding="utf-8") as f:
             donnees = json.load(f)
-            
+        
+        # Restaurer TOUTES les données
         st.session_state.agents = donnees.get("agents", [])
         st.session_state.planning = donnees.get("planning", {})
         st.session_state.heures = donnees.get("heures", {})
         st.session_state.donnees_cloud_centralisees = donnees.get("donnees_cloud_centralisees", [])
+        st.session_state.taches_operateur = donnees.get("taches_operateur", {})
+        st.session_state.taches_en_cours = donnees.get("taches_en_cours", [])
+        st.session_state.couleurs = donnees.get("couleurs", {
+            "Travail": "#2E7D32", "OFF": "#757575", "Congé": "#8D6E63", 
+            "Maladie": "#C62828", "Formation": "#1565C0"
+        })
+        st.session_state.task_id_counter = donnees.get("task_id_counter", 0)
+        st.session_state.show_completed_tasks = donnees.get("show_completed_tasks", True)
+        
+        # Ajouter un flag pour indiquer que les données ont été chargées
+        st.session_state.data_loaded = True
+        
         return True
-    except Exception:
+    except Exception as e:
         return False
 
 # --- INITIALISATION DE SESSION ---
@@ -546,6 +642,12 @@ if "user_actif" not in st.session_state:
 if "user_role" not in st.session_state:
     st.session_state.user_role = role_stocke
 
+if "data_loaded" not in st.session_state:
+    st.session_state.data_loaded = False
+
+if "user_changed" not in st.session_state:
+    st.session_state.user_changed = False
+
 AGENTS_PAR_DEFAUT = [
     {"Nom": "Jean Doe", "Poste": "Setup Operator"},
     {"Nom": "Alice Smith", "Poste": "Team Leader"},
@@ -553,18 +655,54 @@ AGENTS_PAR_DEFAUT = [
     {"Nom": "Elizara", "Poste": "Setup Operator"}
 ]
 
-if "agents" not in st.session_state: st.session_state.agents = list(AGENTS_PAR_DEFAUT)
-if "planning" not in st.session_state: st.session_state.planning = {}
-if "heures" not in st.session_state: st.session_state.heures = {}
-if "donnees_cloud_centralisees" not in st.session_state: st.session_state.donnees_cloud_centralisees = []
+# Initialisation des variables avec les valeurs par défaut si elles n'existent pas
+if "agents" not in st.session_state: 
+    st.session_state.agents = list(AGENTS_PAR_DEFAUT)
+if "planning" not in st.session_state: 
+    st.session_state.planning = {}
+if "heures" not in st.session_state: 
+    st.session_state.heures = {}
+if "donnees_cloud_centralisees" not in st.session_state: 
+    st.session_state.donnees_cloud_centralisees = []
 if "couleurs" not in st.session_state:
     st.session_state.couleurs = {
         "Travail": "#2E7D32", "OFF": "#757575", "Congé": "#8D6E63", "Maladie": "#C62828", "Formation": "#1565C0"
     }
+if "taches_operateur" not in st.session_state:
+    st.session_state.taches_operateur = {}
+if "taches_en_cours" not in st.session_state:
+    st.session_state.taches_en_cours = []
+if "task_id_counter" not in st.session_state:
+    st.session_state.task_id_counter = 0
+if "show_completed_tasks" not in st.session_state:
+    st.session_state.show_completed_tasks = True
 
-# Charger la sauvegarde partagée pour tous les admins
-if st.session_state.authentifie and st.session_state.user_role == "admin" and not st.session_state.planning and not st.session_state.heures:
-    charger_derniere_sauvegarde()
+# --- CHARGEMENT AUTOMATIQUE DES DONNÉES AU DÉMARRAGE ---
+# On charge les données même si l'utilisateur n'est pas encore connecté
+# Cela permet de les garder en mémoire pour quand il se reconnectera
+if not st.session_state.get("data_loaded", False):
+    try:
+        fichier_last = "sauvegardes/sauvegarde_last.json"
+        if os.path.exists(fichier_last):
+            with open(fichier_last, "r", encoding="utf-8") as f:
+                donnees = json.load(f)
+            
+            # Restaurer TOUTES les données
+            st.session_state.agents = donnees.get("agents", [])
+            st.session_state.planning = donnees.get("planning", {})
+            st.session_state.heures = donnees.get("heures", {})
+            st.session_state.donnees_cloud_centralisees = donnees.get("donnees_cloud_centralisees", [])
+            st.session_state.taches_operateur = donnees.get("taches_operateur", {})
+            st.session_state.taches_en_cours = donnees.get("taches_en_cours", [])
+            st.session_state.couleurs = donnees.get("couleurs", {
+                "Travail": "#2E7D32", "OFF": "#757575", "Congé": "#8D6E63", 
+                "Maladie": "#C62828", "Formation": "#1565C0"
+            })
+            st.session_state.task_id_counter = donnees.get("task_id_counter", 0)
+            st.session_state.show_completed_tasks = donnees.get("show_completed_tasks", True)
+            st.session_state.data_loaded = True
+    except Exception as e:
+        st.session_state.data_loaded = True
 
 # --- INTERFACE DE CONNEXION ---
 if not st.session_state.authentifie:
@@ -605,25 +743,17 @@ if not st.session_state.authentifie:
                                 st.session_state.authentifie = True
                                 st.session_state.user_actif = identifiant
                                 st.session_state.user_role = get_user_role(identifiant)
+                                st.session_state.user_changed = True
                                 
                                 sauvegarder_etat_connexion(identifiant, True, st.session_state.user_role)
                                 
-                                # Charger la sauvegarde partagée si admin
-                                if st.session_state.user_role == "admin":
-                                    restaure = charger_derniere_sauvegarde()
-                                else:
-                                    restaure = False
-                                
+                                # Sauvegarder après le chargement
                                 executer_sauvegarde_auto("login", identifiant)
                                 
                                 with st.spinner("Synchronisation des bases de données..."):
                                     time.sleep(1.2)
                                     
-                                if restaure:
-                                    st.toast("📊 Données partagées restaurées avec succès !", icon="🔄")
-                                else:
-                                    st.toast("⚠️ Aucune sauvegarde trouvée. Chargement du profil neuf.", icon="🆕")
-                                    
+                                st.toast("✅ Connexion réussie ! Données chargées.", icon="✅")
                                 st.rerun()
                             else:
                                 st.error(f"❌ {message}")
@@ -694,57 +824,622 @@ if not st.session_state.authentifie:
             st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# --- PAGE POUR OPÉRATEUR (DASHBOARD VIDE) ---
+# --- PAGE POUR OPÉRATEUR (DASHBOARD AVEC CHRONOMÈTRE PROFESSIONNEL) ---
 def page_operateur_dashboard():
-    st.title("👋 Bienvenue, Opérateur")
+    st.title("⏱️ Dashboard Opérateur - Suivi des Tâches")
     
-    st.markdown("""
+    # Informations utilisateur
+    st.markdown(f"""
         <div style="
-            text-align: center;
-            padding: 60px 20px;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 20px;
-            border: 2px dashed rgba(46, 125, 50, 0.3);
-            margin-top: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px 20px;
+            border-radius: 12px;
+            border-left: 4px solid #4CAF50;
+            margin-bottom: 20px;
         ">
-            <div style="font-size: 80px; margin-bottom: 20px;">🚧</div>
-            <h2 style="color: #4CAF50;">Dashboard Opérateur en Construction</h2>
-            <p style="color: #94a3b8; font-size: 18px; max-width: 600px; margin: 20px auto;">
-                Un tableau de bord spécialement conçu pour les opérateurs est actuellement en développement.
-            </p>
-            <p style="color: #64748b; font-size: 16px;">
-                Vous pourrez bientôt suivre vos performances, consulter votre planning 
-                et accéder à vos statistiques personnelles.
-            </p>
-            <div style="
-                margin-top: 30px;
-                display: inline-block;
-                padding: 8px 24px;
-                background: rgba(46, 125, 50, 0.15);
-                border-radius: 30px;
-                border: 1px solid rgba(46, 125, 50, 0.3);
-                color: #4CAF50;
-                font-weight: 500;
-            ">
-                ⏳ Arrivée prévue : Prochainement
-            </div>
+            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
+            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
+            <span style="color: #94a3b8; margin-left: 20px;">🔵 Rôle : Opérateur</span>
+            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
     
-    # Informations de base sur l'utilisateur
-    st.markdown("---")
-    st.markdown("### 📋 Vos Informations")
+    # Liste des tâches disponibles
+    TACHES_DISPONIBLES = [
+        "INTEGRATION",
+        "OTHER CAM",
+        "PREMIUM",
+        "CORRECTION",
+        "SUBSTITUTIONS",
+        "FEP",
+        "MATCH SETUP",
+        "ATTENTE VIDEOS",
+        "CHECK",
+        "PREPARATION",
+        "FICHIER",
+        "SCOUTING"
+    ]
     
-    col_info1, col_info2, col_info3 = st.columns(3)
-    with col_info1:
-        st.metric("👤 Nom d'utilisateur", st.session_state.user_actif)
-    with col_info2:
-        st.metric("🔑 Rôle", "Opérateur 🔵")
-    with col_info3:
-        users = load_users()
-        if st.session_state.user_actif in users:
-            created_at = datetime.fromisoformat(users[st.session_state.user_actif]["created_at"]).strftime("%d/%m/%Y")
-            st.metric("📅 Compte créé le", created_at)
+    # --- SECTION NOUVELLE TÂCHE ---
+    st.markdown("### 🚀 Démarrer une nouvelle tâche")
+    
+    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
+    
+    with col1:
+        tache_selectionnee = st.selectbox(
+            "Type de tâche",
+            options=TACHES_DISPONIBLES,
+            key="new_task_select"
+        )
+    
+    with col2:
+        match_info = st.text_input("MATCH", placeholder="vs", key="match_new")
+    
+    with col3:
+        wf_info = st.text_input("WF", placeholder="Workflow", key="wf_new")
+    
+    with col4:
+        ligue_info = st.text_input("LIGUE", placeholder="Ligue", key="ligue_new")
+    
+    with col5:
+        remarques_info = st.text_area("REMARQUES", placeholder="Notes", key="remarques_new", height=68)
+    
+    # Bouton pour démarrer
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 3])
+    with col_btn1:
+        if st.button("▶️ START", type="primary", use_container_width=True):
+            # Créer une nouvelle tâche
+            task_id = st.session_state.task_id_counter + 1
+            st.session_state.task_id_counter = task_id
+            
+            new_task = {
+                "id": task_id,
+                "tache": tache_selectionnee,
+                "match": match_info if match_info else "",
+                "wf": wf_info if wf_info else "",
+                "ligue": ligue_info if ligue_info else "",
+                "remarques": remarques_info if remarques_info else "",
+                "statut": "en_cours",  # en_cours, pause, termine
+                "start_time": datetime.now().isoformat(),
+                "elapsed_seconds": 0,
+                "last_start": time.time(),
+                "pauses": [],
+                "date_debut": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "temps_total_secondes": 0,
+                "temps_formate": "00h00m00s"
+            }
+            
+            st.session_state.taches_en_cours.append(new_task)
+            executer_sauvegarde_auto("task_start", st.session_state.user_actif)
+            st.toast(f"✅ Tâche {tache_selectionnee} démarrée !", icon="▶️")
+            st.rerun()
+    
+    with col_btn2:
+        if st.button("🔄 Rafraîchir", use_container_width=True):
+            st.rerun()
+    
+    # --- TÂCHES EN COURS ---
+    st.markdown("---")
+    st.markdown("### 📋 Tâches en cours")
+    
+    if st.session_state.taches_en_cours:
+        # Filtrer les tâches non terminées
+        taches_actives = [t for t in st.session_state.taches_en_cours if t["statut"] != "termine"]
+        taches_terminees = [t for t in st.session_state.taches_en_cours if t["statut"] == "termine"]
+        
+        # Métriques rapides
+        col_met1, col_met2, col_met3 = st.columns(3)
+        with col_met1:
+            st.metric("🟢 En cours", len([t for t in taches_actives if t["statut"] == "en_cours"]))
+        with col_met2:
+            st.metric("⏸️ En pause", len([t for t in taches_actives if t["statut"] == "pause"]))
+        with col_met3:
+            st.metric("✅ Terminées", len(taches_terminees))
+        
+        # Afficher les tâches actives
+        if taches_actives:
+            st.markdown("#### ⏳ Tâches actives")
+            
+            # Créer un conteneur pour les tâches
+            for task in taches_actives:
+                # Calculer le temps écoulé
+                if task["statut"] == "en_cours":
+                    elapsed = task["elapsed_seconds"] + (time.time() - task["last_start"])
+                else:
+                    elapsed = task["elapsed_seconds"]
+                
+                # Formater le temps
+                heures = int(elapsed // 3600)
+                minutes = int((elapsed % 3600) // 60)
+                secondes = int(elapsed % 60)
+                
+                # Déterminer le statut
+                if task["statut"] == "en_cours":
+                    status_class = "running"
+                    status_text = "🟢 En cours"
+                    border_color = "#4CAF50"
+                    timer_class = "timer-running"
+                else:
+                    status_class = "paused"
+                    status_text = "⏸️ En pause"
+                    border_color = "#FFA726"
+                    timer_class = "paused"
+                
+                # Afficher la carte de la tâche
+                with st.container():
+                    col_task_info, col_task_timer, col_task_actions = st.columns([3, 2, 3])
+                    
+                    with col_task_info:
+                        st.markdown(f"""
+                            <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 10px; border-left: 4px solid {border_color};">
+                                <div style="font-weight: 600; color: #e2e8f0;">{task['tache']}</div>
+                                <div style="font-size: 12px; color: #94a3b8;">
+                                    🏷️ {task['match'] if task['match'] else 'N/A'} | 
+                                    📋 {task['wf'] if task['wf'] else 'N/A'} | 
+                                    🏆 {task['ligue'] if task['ligue'] else 'N/A'}
+                                </div>
+                                <div style="font-size: 11px; color: #64748b; margin-top: 4px;">
+                                    🕐 Début: {task['date_debut']}
+                                </div>
+                                <div style="margin-top: 4px;">
+                                    <span class="task-status {status_class}">{status_text}</span>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col_task_timer:
+                        st.markdown(f"""
+                            <div style="text-align: center; padding: 10px;">
+                                <div class="task-timer {timer_class}" id="timer_{task['id']}">
+                                    {heures:02d}:{minutes:02d}:{secondes:02d}
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col_task_actions:
+                        # Boutons d'action
+                        col_btn_pause, col_btn_resume, col_btn_stop = st.columns(3)
+                        
+                        with col_btn_pause:
+                            if task["statut"] == "en_cours":
+                                if st.button("⏸️ Pause", key=f"pause_{task['id']}", use_container_width=True):
+                                    # Mettre en pause
+                                    task["statut"] = "pause"
+                                    task["elapsed_seconds"] += time.time() - task["last_start"]
+                                    executer_sauvegarde_auto("task_pause", st.session_state.user_actif)
+                                    st.toast(f"⏸️ Tâche {task['tache']} en pause", icon="⏸️")
+                                    st.rerun()
+                        
+                        with col_btn_resume:
+                            if task["statut"] == "pause":
+                                if st.button("▶️ Reprendre", key=f"resume_{task['id']}", use_container_width=True):
+                                    # Reprendre
+                                    task["statut"] = "en_cours"
+                                    task["last_start"] = time.time()
+                                    executer_sauvegarde_auto("task_resume", st.session_state.user_actif)
+                                    st.toast(f"▶️ Tâche {task['tache']} reprise", icon="▶️")
+                                    st.rerun()
+                        
+                        with col_btn_stop:
+                            if st.button("⏹️ Terminer", key=f"stop_{task['id']}", use_container_width=True, type="secondary"):
+                                # Terminer la tâche
+                                if task["statut"] == "en_cours":
+                                    task["elapsed_seconds"] += time.time() - task["last_start"]
+                                
+                                # Sauvegarder dans l'historique
+                                task["statut"] = "termine"
+                                task["date_fin"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                                task["temps_total_secondes"] = task["elapsed_seconds"]
+                                
+                                # Formater le temps total
+                                heures_fin = int(task["elapsed_seconds"] // 3600)
+                                minutes_fin = int((task["elapsed_seconds"] % 3600) // 60)
+                                secondes_fin = int(task["elapsed_seconds"] % 60)
+                                task["temps_formate"] = f"{heures_fin:02d}h{minutes_fin:02d}m{secondes_fin:02d}s"
+                                
+                                # Ajouter à l'historique
+                                if task["tache"] not in st.session_state.taches_operateur:
+                                    st.session_state.taches_operateur[task["tache"]] = []
+                                
+                                st.session_state.taches_operateur[task["tache"]].append({
+                                    "date_debut": task["date_debut"],
+                                    "date_fin": task["date_fin"],
+                                    "tache": task["tache"],
+                                    "temps_secondes": task["elapsed_seconds"],
+                                    "temps_formate": task["temps_formate"],
+                                    "match": task["match"],
+                                    "wf": task["wf"],
+                                    "ligue": task["ligue"],
+                                    "remarques": task["remarques"],
+                                    "statut": "Terminé"
+                                })
+                                
+                                executer_sauvegarde_auto("task_complete", st.session_state.user_actif)
+                                st.toast(f"✅ Tâche {task['tache']} terminée ! Temps : {task['temps_formate']}", icon="✅")
+                                st.rerun()
+                    
+                    st.markdown("---")
+        else:
+            st.info("📋 Aucune tâche active pour le moment.")
+        
+        # --- AFFICHER LES TÂCHES TERMINÉES DE LA SESSION AVEC OPTION MASQUER ---
+        if taches_terminees:
+            st.markdown("#### ✅ Tâches terminées dans cette session")
+            
+            # Option pour masquer/afficher
+            col_toggle, _ = st.columns([1, 3])
+            with col_toggle:
+                show_tasks = st.checkbox("📂 Afficher les tâches terminées", value=st.session_state.show_completed_tasks)
+                st.session_state.show_completed_tasks = show_tasks
+            
+            if st.session_state.show_completed_tasks:
+                for task in taches_terminees:
+                    with st.expander(f"✅ {task['tache']} - {task.get('temps_formate', 'N/A')}"):
+                        col_det1, col_det2 = st.columns(2)
+                        with col_det1:
+                            st.write(f"**MATCH:** {task.get('match', 'N/A')}")
+                            st.write(f"**WF:** {task.get('wf', 'N/A')}")
+                            st.write(f"**LIGUE:** {task.get('ligue', 'N/A')}")
+                        with col_det2:
+                            st.write(f"**Début:** {task.get('date_debut', 'N/A')}")
+                            st.write(f"**Fin:** {task.get('date_fin', 'N/A')}")
+                            st.write(f"**Temps total:** {task.get('temps_formate', 'N/A')}")
+                        if task.get('remarques'):
+                            st.write(f"**Remarques:** {task['remarques']}")
+            else:
+                st.caption("👁️ Tâches terminées masquées (cochez la case ci-dessus pour les afficher)")
+    else:
+        st.info("📋 Aucune tâche en cours. Commencez une nouvelle tâche ci-dessus.")
+    
+    # --- HISTORIQUE COMPLET ---
+    st.markdown("---")
+    st.markdown("### 📊 Historique complet des tâches")
+    
+    # Préparer les données pour le tableau
+    historique_data = []
+    for tache, entries in st.session_state.taches_operateur.items():
+        for entry in entries:
+            historique_data.append({
+                "Date Début": entry.get("date_debut", "N/A"),
+                "Date Fin": entry.get("date_fin", "N/A"),
+                "Tâche": tache,
+                "Temps": entry.get("temps_formate", "N/A"),
+                "Temps (sec)": entry.get("temps_secondes", 0),
+                "MATCH": entry.get("match", "N/A"),
+                "WF": entry.get("wf", "N/A"),
+                "LIGUE": entry.get("ligue", "N/A"),
+                "REMARQUES": entry.get("remarques", "N/A"),
+                "Statut": entry.get("statut", "Terminé")
+            })
+    
+    if historique_data:
+        df_historique = pd.DataFrame(historique_data)
+        
+        # Afficher les métriques
+        col_met_a, col_met_b, col_met_c, col_met_d = st.columns(4)
+        with col_met_a:
+            st.metric("📋 Total Tâches", len(historique_data))
+        with col_met_b:
+            # Utiliser get avec valeur par défaut 0 pour éviter KeyError
+            total_temps = sum([entry.get("Temps (sec)", 0) for entry in historique_data])
+            heures_tot = int(total_temps // 3600)
+            min_tot = int((total_temps % 3600) // 60)
+            sec_tot = int(total_temps % 60)
+            st.metric("⏱️ Temps Total", f"{heures_tot:02d}h{min_tot:02d}m{sec_tot:02d}s")
+        with col_met_c:
+            if len(historique_data) > 0:
+                temps_moyen = total_temps / len(historique_data)
+                h_moy = int(temps_moyen // 3600)
+                m_moy = int((temps_moyen % 3600) // 60)
+                s_moy = int(temps_moyen % 60)
+                st.metric("📊 Temps Moyen", f"{h_moy:02d}h{m_moy:02d}m{s_moy:02d}s")
+        with col_met_d:
+            # Compter par type de tâche
+            types_counts = df_historique["Tâche"].value_counts()
+            if not types_counts.empty:
+                st.metric("🏷️ Types de tâches", len(types_counts))
+        
+        # Afficher le tableau
+        st.dataframe(
+            df_historique[["Date Début", "Date Fin", "Tâche", "Temps", "MATCH", "WF", "LIGUE", "Statut"]],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Boutons d'action
+        col_exp1, col_exp2, col_exp3 = st.columns(3)
+        
+        with col_exp1:
+            if st.button("📥 Exporter CSV", use_container_width=True):
+                csv = df_historique.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📥 Télécharger",
+                    data=csv,
+                    file_name=f"historique_taches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        with col_exp2:
+            if st.button("🗑️ Effacer l'historique", use_container_width=True, type="secondary"):
+                st.session_state.taches_operateur = {}
+                executer_sauvegarde_auto("clear_history", st.session_state.user_actif)
+                st.toast("🗑️ Historique effacé", icon="🗑️")
+                st.rerun()
+        
+        with col_exp3:
+            # Graphique de répartition
+            if st.button("📊 Voir graphiques", use_container_width=True):
+                # Créer un graphique de répartition des tâches
+                fig = px.pie(
+                    df_historique,
+                    names="Tâche",
+                    title="Répartition des tâches",
+                    color_discrete_sequence=px.colors.qualitative.Set3
+                )
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font_color='#e2e8f0'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Graphique des temps par tâche
+                df_temps = df_historique.groupby("Tâche")["Temps (sec)"].sum().reset_index()
+                fig2 = px.bar(
+                    df_temps,
+                    x="Tâche",
+                    y="Temps (sec)",
+                    title="Temps total par type de tâche",
+                    color="Tâche",
+                    labels={"Temps (sec)": "Temps (secondes)"}
+                )
+                fig2.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font_color='#e2e8f0',
+                    xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                    yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("📋 Aucune tâche dans l'historique. Utilisez le chronomètre pour suivre vos activités.")
+
+# --- PAGE RÉSUMÉ & PLANNING OPÉRATEUR ---
+def page_operateur_resume():
+    st.title("📊 Résumé & Planning Opérateur")
+    
+    # Informations utilisateur
+    st.markdown(f"""
+        <div style="
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px 20px;
+            border-radius: 12px;
+            border-left: 4px solid #4CAF50;
+            margin-bottom: 20px;
+        ">
+            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
+            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
+            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Charger les données depuis l'admin si disponibles
+    user_login = st.session_state.user_actif
+    
+    # Vérifier si l'utilisateur existe dans la liste des agents
+    agent_trouve = False
+    agent_info = None
+    
+    for agent in st.session_state.agents:
+        if agent["Nom"].lower() == user_login.lower():
+            agent_trouve = True
+            agent_info = agent
+            break
+    
+    if agent_trouve:
+        st.success(f"✅ Bienvenue {agent_info['Nom']} - {agent_info['Poste']}")
+        
+        # --- SECTION PLANNING ---
+        st.markdown("---")
+        st.markdown("### 🗓️ Mon Planning")
+        
+        # Sélection de la semaine
+        col_date1, col_date2 = st.columns(2)
+        with col_date1:
+            annee_sel = st.selectbox("Année", [2026, 2027], index=0, key="resume_yr")
+        with col_date2:
+            mois_options = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
+            mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], index=datetime.now().month - 1, key="resume_mo")
+        
+        cal = calendar.Calendar(firstweekday=0)
+        semaines_du_mois = cal.monthdayscalendar(annee_sel, mois_sel)
+        
+        options_semaines = {}
+        for idx, sem in enumerate(semaines_du_mois):
+            jours_valides = [j for j in sem if j != 0]
+            if jours_valides:
+                options_semaines[idx] = f"Semaine {idx + 1} (Du {jours_valides[0]:02d} au {jours_valides[-1]:02d})"
+        
+        if options_semaines:
+            semaine_idx = st.selectbox("Sélectionner la Semaine", list(options_semaines.keys()), format_func=lambda x: options_semaines[x], key="resume_wk")
+            semaine_choisie = semaines_du_mois[semaine_idx]
+            noms_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+            
+            # Afficher le planning de l'agent
+            planning_agent = {}
+            jours_planning = []
+            
+            for i, j in enumerate(semaine_choisie):
+                if j != 0:
+                    date_cle = f"{annee_sel}-{mois_sel:02d}-{j:02d}"
+                    statut = st.session_state.planning.get(date_cle, {}).get(user_login, "Non défini")
+                    planning_agent[noms_jours[i]] = statut
+                    jours_planning.append({
+                        "Jour": noms_jours[i],
+                        "Date": f"{j:02d}/{mois_sel:02d}/{annee_sel}",
+                        "Statut": statut
+                    })
+            
+            if jours_planning:
+                df_planning = pd.DataFrame(jours_planning)
+                st.dataframe(df_planning, use_container_width=True, hide_index=True)
+                
+                # Afficher les métriques du planning
+                col_stat1, col_stat2, col_stat3 = st.columns(3)
+                with col_stat1:
+                    nb_travail = len([p for p in planning_agent.values() if p == "Travail"])
+                    st.metric("✅ Jours travaillés", nb_travail)
+                with col_stat2:
+                    nb_off = len([p for p in planning_agent.values() if p == "OFF"])
+                    st.metric("⭕ Jours OFF", nb_off)
+                with col_stat3:
+                    nb_conge = len([p for p in planning_agent.values() if p == "Congé"])
+                    st.metric("🏖️ Jours de congé", nb_conge)
+        else:
+            st.info("📋 Aucune semaine disponible pour ce mois.")
+        
+        # --- SECTION HEURES ---
+        st.markdown("---")
+        st.markdown("### ⏱️ Mes Heures")
+        
+        # Sélection du mois pour les heures
+        col_mois_heures, col_btn_heures = st.columns([3, 1])
+        with col_mois_heures:
+            mois_heures = st.selectbox(
+                "Sélectionner le mois",
+                list(mois_options.keys()),
+                format_func=lambda x: mois_options[x],
+                index=datetime.now().month - 1,
+                key="resume_heures_mo"
+            )
+        
+        # Calculer les heures pour l'agent
+        heures_agent = []
+        total_heures_mois = 0
+        total_heures_nuit_mois = 0
+        jours_travailles = 0
+        
+        _, max_jours = calendar.monthrange(annee_sel, mois_heures)
+        
+        for jour in range(1, max_jours + 1):
+            date_cle = f"{annee_sel}-{mois_heures:02d}-{jour:02d}"
+            if date_cle in st.session_state.heures:
+                donnee = st.session_state.heures[date_cle].get(user_login, None)
+                if donnee:
+                    if isinstance(donnee, dict):
+                        heures = donnee.get("total", 0)
+                        heures_nuit = donnee.get("nuit", 0)
+                    else:
+                        heures = float(donnee)
+                        heures_nuit = 0
+                    
+                    if heures > 0:
+                        dt_obj = datetime(annee_sel, mois_heures, jour)
+                        heures_agent.append({
+                            "Date": f"{jour:02d}/{mois_heures:02d}/{annee_sel}",
+                            "Jour": noms_jours[dt_obj.weekday()],
+                            "Heures": formater_en_duree(heures),
+                            "Heures Nuit": formater_en_duree(heures_nuit),
+                            "Heures (num)": heures
+                        })
+                        total_heures_mois += heures
+                        total_heures_nuit_mois += heures_nuit
+                        jours_travailles += 1
+        
+        if heures_agent:
+            df_heures = pd.DataFrame(heures_agent)
+            st.dataframe(
+                df_heures[["Date", "Jour", "Heures", "Heures Nuit"]],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Métriques des heures
+            col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+            with col_h1:
+                st.metric("📅 Jours travaillés", jours_travailles)
+            with col_h2:
+                st.metric("⏱️ Total Heures", formater_en_duree(total_heures_mois))
+            with col_h3:
+                st.metric("🌙 Heures de Nuit", formater_en_duree(total_heures_nuit_mois))
+            with col_h4:
+                if jours_travailles > 0:
+                    moyenne = total_heures_mois / jours_travailles
+                    st.metric("📊 Moyenne/Jour", formater_en_duree(moyenne))
+        else:
+            st.info("📋 Aucune heure enregistrée pour ce mois.")
+        
+        # --- SECTION RÉSUMÉ DES ACTIVITÉS ---
+        st.markdown("---")
+        st.markdown("### 📈 Résumé de mes activités")
+        
+        # Récupérer les tâches de l'opérateur
+        taches_agent = []
+        for tache, entries in st.session_state.taches_operateur.items():
+            for entry in entries:
+                taches_agent.append({
+                    "Date": entry.get("date_debut", "N/A"),
+                    "Tâche": tache,
+                    "Temps": entry.get("temps_formate", "N/A"),
+                    "Temps (sec)": entry.get("temps_secondes", 0),
+                    "MATCH": entry.get("match", "N/A"),
+                    "WF": entry.get("wf", "N/A"),
+                    "LIGUE": entry.get("ligue", "N/A")
+                })
+        
+        if taches_agent:
+            df_taches = pd.DataFrame(taches_agent)
+            
+            # Métriques
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                st.metric("📋 Total Tâches", len(taches_agent))
+            with col_m2:
+                total_tps = sum([t.get("Temps (sec)", 0) for t in taches_agent])
+                h = int(total_tps // 3600)
+                m = int((total_tps % 3600) // 60)
+                s = int(total_tps % 60)
+                st.metric("⏱️ Temps Total", f"{h:02d}h{m:02d}m{s:02d}s")
+            with col_m3:
+                if len(taches_agent) > 0:
+                    moy = total_tps / len(taches_agent)
+                    h_m = int(moy // 3600)
+                    m_m = int((moy % 3600) // 60)
+                    s_m = int(moy % 60)
+                    st.metric("📊 Temps Moyen", f"{h_m:02d}h{m_m:02d}m{s_m:02d}s")
+            
+            # Afficher les tâches
+            st.dataframe(
+                df_taches[["Date", "Tâche", "Temps", "MATCH", "WF", "LIGUE"]],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Graphique de répartition
+            fig = px.pie(
+                df_taches,
+                names="Tâche",
+                title="Répartition de mes tâches",
+                color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font_color='#e2e8f0'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("📋 Aucune activité enregistrée pour le moment.")
+        
+    else:
+        st.warning(f"""
+            ⚠️ Aucun agent trouvé avec le nom '{user_login}'.
+            
+            Veuillez contacter l'administrateur pour que votre compte soit lié à un agent dans la base de données.
+            
+            **Agents disponibles :**
+            {', '.join([a['Nom'] for a in st.session_state.agents])}
+        """)
 
 # --- BARRE LATÉRALE GLOBALE AVEC AFFICHAGE DU RÔLE ---
 with st.sidebar:
@@ -780,14 +1475,37 @@ with st.sidebar:
                 </div>
             """, unsafe_allow_html=True)
     
-    # --- ACTIONS SELON LE RÔLE ---
-    # Sauvegarde - accessible à tous les admins
-    if st.session_state.user_role == "admin":
-        if st.button("💾 Sauvegarder les données", use_container_width=True):
-            succes, _ = executer_sauvegarde_auto("manuel", st.session_state.user_actif)
-            if succes: 
-                st.toast("Données partagées sauvegardées ! Tous les admins verront les modifications.", icon="💾")
+    # --- SECTION SAUVEGARDE ---
+    st.markdown("---")
+    st.markdown("### 💾 Gestion des données")
     
+    # Sauvegarde manuelle
+    if st.button("💾 Sauvegarder maintenant", use_container_width=True, type="primary"):
+        if st.session_state.authentifie and st.session_state.user_actif:
+            success, nom_fichier = executer_sauvegarde_auto("manuel", st.session_state.user_actif)
+            if success:
+                st.toast("✅ Données sauvegardées avec succès !", icon="💾")
+            else:
+                st.toast(f"❌ Erreur lors de la sauvegarde", icon="❌")
+    
+    # Restaurer la dernière sauvegarde
+    if st.button("🔄 Restaurer dernière sauvegarde", use_container_width=True):
+        if charger_derniere_sauvegarde():
+            st.toast("✅ Données restaurées avec succès !", icon="🔄")
+            st.rerun()
+        else:
+            st.toast("❌ Aucune sauvegarde trouvée", icon="❌")
+    
+    # Afficher le nombre de sauvegardes
+    try:
+        fichiers = glob.glob("sauvegardes/sauvegarde_*.json")
+        fichiers = [f for f in fichiers if "last" not in f]
+        if fichiers:
+            st.caption(f"📊 {len(fichiers)} sauvegardes disponibles")
+    except:
+        pass
+    
+    # --- ACTIONS SELON LE RÔLE ---
     # Zone critique - accessible à tous les admins
     if st.session_state.user_role == "admin":
         st.markdown("---")
@@ -799,19 +1517,30 @@ with st.sidebar:
             st.session_state.planning = {}
             st.session_state.heures = {}
             st.session_state.donnees_cloud_centralisees = []
+            st.session_state.taches_operateur = {}
+            st.session_state.taches_en_cours = []
+            st.session_state.task_id_counter = 0
             
             executer_sauvegarde_auto("reset", st.session_state.user_actif)
-            st.toast("Grilles et compteur réinitialisés pour tous les admins !", icon="💥")
+            st.toast("Grilles et compteur réinitialisés !", icon="💥")
             time.sleep(0.5)
             st.rerun()
     
     st.markdown("---")
     if st.button("🚪 Déconnexion", type="secondary", use_container_width=True):
+        # Sauvegarder avant la déconnexion
         executer_sauvegarde_auto("logout", st.session_state.user_actif)
+        
+        # Sauvegarder l'état de connexion (authentifie = False)
         sauvegarder_etat_connexion("", False, "operateur")
+        
+        # Déconnecter l'utilisateur mais GARDER LES DONNÉES
         st.session_state.authentifie = False
         st.session_state.user_actif = ""
         st.session_state.user_role = "operateur"
+        st.session_state.data_loaded = True  # On garde les données chargées
+        st.session_state.user_changed = True
+        
         st.rerun()
     st.markdown("---")
 
@@ -2015,7 +2744,8 @@ if st.session_state.authentifie:
     if st.session_state.user_role == "operateur":
         pg = st.navigation({
             "Menu Principal": [
-                st.Page(page_operateur_dashboard, title="Mon Dashboard", icon="📊"),
+                st.Page(page_operateur_dashboard, title="Suivi des Tâches", icon="⏱️"),
+                st.Page(page_operateur_resume, title="Résumé & Planning", icon="📊"),
             ]
         })
     else:  # admin
