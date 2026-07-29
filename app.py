@@ -1523,7 +1523,7 @@ def page_operateur_dashboard():
             
             col_exp1, col_exp2, col_exp3 = st.columns(3)
             with col_exp1:
-                if st.button("📥 Exporter CSV", use_container_width=True):
+                if st.button("Exporter CSV", use_container_width=True):
                     csv = df_historique.to_csv(index=False, encoding='utf-8-sig')
                     st.download_button(
                         label="📥 Télécharger",
@@ -1577,7 +1577,7 @@ def page_operateur_dashboard():
             st.info("Aucune tâche dans l'historique.")
     
     # --- EXPORT GOOGLE SHEETS (dans un expander) ---
-    with st.expander("📤 Export vers Google Sheets", expanded=False):
+    with st.expander("Export vers Google Sheets", expanded=False):
         export_rows = []
         for tache, entries in st.session_state.taches_operateur.items():
             for entry in entries:
@@ -1609,7 +1609,7 @@ def page_operateur_dashboard():
         if export_rows:
             df_export = pd.DataFrame(export_rows)
             st.dataframe(df_export, use_container_width=True, hide_index=True)
-            if st.button("📤 Exporter vers Google Sheets", type="primary", use_container_width=True):
+            if st.button("Exporter vers Google Sheets", type="primary", use_container_width=True):
                 try:
                     SPREADSHEET_ID = st.secrets["google_sheets"]["spreadsheet_id"]
                 except:
@@ -1619,7 +1619,7 @@ def page_operateur_dashboard():
                     success, msg = exporter_vers_google_sheets(st.session_state.user_actif, df_export, SPREADSHEET_ID)
                     if success:
                         st.success(msg)
-                        st.toast("📤 Export effectué", icon="✅")
+                        st.toast("Export effectué", icon="✅")
                     else:
                         st.error(msg)
         else:
