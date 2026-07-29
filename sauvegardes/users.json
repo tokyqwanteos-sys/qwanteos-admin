@@ -1,0 +1,38 @@
+{
+    "Test": {
+        "password": "9a931c55ac02bf216550c464b1992a30c522dfabf6cb31deada5c716bc13a263",
+        "full_name": "",
+        "role": "admin",
+        "created_at": "2026-07-10T15:15:25.817581",
+        "last_login": "2026-07-29T10:02:20.448504",
+        "login_attempts": 0,
+        "locked_until": null
+    },
+    "Ny Haingo": {
+        "password": "9a931c55ac02bf216550c464b1992a30c522dfabf6cb31deada5c716bc13a263",
+        "full_name": "",
+        "role": "operateur",
+        "created_at": "2026-07-14T14:08:11.841197",
+        "last_login": "2026-07-14T14:08:30.329070",
+        "login_attempts": 1,
+        "locked_until": null
+    },
+    "Toky": {
+        "password": "edf398a556784ed7768289c8a5ade5912b70b419a104874a3b2c2aba1b1a337b",
+        "full_name": "",
+        "role": "operateur",
+        "created_at": "2026-07-28T10:46:15.216177",
+        "last_login": "2026-07-29T10:43:32.890585",
+        "login_attempts": 0,
+        "locked_until": null
+    },
+    "Test 1": {
+        "password": "9a931c55ac02bf216550c464b1992a30c522dfabf6cb31deada5c716bc13a263",
+        "full_name": "",
+        "role": "operateur",
+        "created_at": "2026-07-28T13:21:12.823111",
+        "last_login": "2026-07-29T10:43:05.361094",
+        "login_attempts": 0,
+        "locked_until": null
+    }
+}
