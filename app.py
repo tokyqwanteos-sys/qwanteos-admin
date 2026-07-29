@@ -1124,7 +1124,7 @@ if not st.session_state.authentifie:
                     st.markdown("### 🔐 Connexion")
                     identifiant = st.text_input("Nom d'utilisateur", value="")
                     mot_de_passe = st.text_input("Mot de passe", type="password")
-                    btn_login = st.form_submit_button("🚀 Se connecter", use_container_width=True)
+                    btn_login = st.form_submit_button("Se connecter", use_container_width=True)
                     
                     if btn_login:
                         if identifiant and mot_de_passe:
@@ -3631,7 +3631,7 @@ def page_synchronisation_cloud():
     date_debut = st.sidebar.date_input("Date de début", value=None)
     date_fin = st.sidebar.date_input("Date de fin", value=None)
     
-    st.markdown("### 🚀 Actions d'Importation")
+    st.markdown("### Actions d'Importation")
     
     col_btn1, col_btn2, col_btn3 = st.columns(3)
     
