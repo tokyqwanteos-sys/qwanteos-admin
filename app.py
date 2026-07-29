@@ -2192,7 +2192,7 @@ def page_chat():
 
 # --- NOUVELLE PAGE : RÉPARTITION DES TÂCHES (KANBAN) ---
 def page_operateur_shared_tasks():
-    st.title("📋 Répartition des Tâches")
+    st.title("Répartition des Tâches")
     
     # En-tête utilisateur simplifié
     st.markdown(f"""
@@ -3842,7 +3842,7 @@ else:
                     st.Page(page_operateur_dashboard, title="Suivi des Tâches", icon="⏱️"),
                     st.Page(page_operateur_resume, title="Résumé & Planning", icon="📊"),
                     st.Page(page_operateur_stats, title="Statistiques & Analyses", icon="📈"),
-                    st.Page(page_operateur_shared_tasks, title="📋 Répartition des tâches", icon="📋"),
+                    st.Page(page_operateur_shared_tasks, title="Répartition des tâches", icon="📋"),
                 ]
             })
         else:  # admin
