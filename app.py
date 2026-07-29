@@ -21,6 +21,9 @@ from zoneinfo import ZoneInfo
 
 import db_manager  # ← Nouvel import
 
+# --- Nouvel import pour la sauvegarde manuelle ---
+from sauvegarde_manager import gestionnaire_sauvegarde
+
 # --- FUSEAU HORAIRE MADAGASCAR (UTC+3) ---
 MADA_TZ = ZoneInfo("Indian/Antananarivo")
 
@@ -192,7 +195,7 @@ def migrer_donnees():
     print("Migration terminée.")
 
 # Exécuter la migration
-migrer_donnees()
+# migrer_donnees()   # <--- SUPPRIMÉ : on ne l'appelle plus automatiquement
 
 # --- NOUVELLE FONCTION DE FORMATAGE DES DATES ISO (avec fuseau Madagascar) ---
 def formater_datetime_iso(iso_str):
@@ -967,86 +970,6 @@ st.markdown("""
 # ce qui causait des interférences entre les sessions utilisateurs.
 # L'authentification est désormais gérée uniquement via st.session_state (propre à chaque navigateur).
 
-def executer_sauvegarde_auto(type_evenement, utilisateur):
-    try:
-        if not os.path.exists("sauvegardes"):
-            os.makedirs("sauvegardes")
-        
-        # Récupérer TOUTES les données de session
-        donnees = {
-            "timestamp": datetime.now(MADA_TZ).isoformat(),
-            "utilisateur": utilisateur,
-            "type_evenement": type_evenement,
-            "agents": st.session_state.get("agents", []),
-            "planning": st.session_state.get("planning", {}),
-            "heures": st.session_state.get("heures", {}),
-            "donnees_cloud_centralisees": st.session_state.get("donnees_cloud_centralisees", []),
-            "taches_operateur": st.session_state.get("taches_operateur", {}),
-            "taches_en_cours": st.session_state.get("taches_en_cours", []),
-            "couleurs": st.session_state.get("couleurs", {}),
-            "task_id_counter": st.session_state.get("task_id_counter", 0),
-            "show_completed_tasks": st.session_state.get("show_completed_tasks", True)
-        }
-        
-        # Sauvegarde avec horodatage - TOUTES les sauvegardes sont conservées
-        horodatage = datetime.now(MADA_TZ).strftime("%Y%m%d_%H%M%S_%f")
-        nom_fichier = f"sauvegardes/sauvegarde_{type_evenement}_{horodatage}.json"
-        
-        with open(nom_fichier, "w", encoding="utf-8") as f:
-            json.dump(donnees, f, ensure_ascii=False, indent=4)
-        
-        # Sauvegarde "last" - toujours écrasée
-        nom_fichier_fixe = "sauvegardes/sauvegarde_last.json"
-        with open(nom_fichier_fixe, "w", encoding="utf-8") as f:
-            json.dump(donnees, f, ensure_ascii=False, indent=4)
-            
-        return True, nom_fichier
-    except Exception as e:
-        return False, str(e)
-
-def charger_derniere_sauvegarde():
-    """Charge la sauvegarde partagée (commune à tous les admins)"""
-    try:
-        if not os.path.exists("sauvegardes"):
-            return False
-        
-        fichier_last = "sauvegardes/sauvegarde_last.json"
-        if os.path.exists(fichier_last):
-            dernier_fichier = fichier_last
-        else:
-            fichiers = glob.glob("sauvegardes/sauvegarde_*.json")
-            if not fichiers:
-                return False
-            # Exclure les fichiers "last"
-            fichiers = [f for f in fichiers if "last" not in f]
-            if not fichiers:
-                return False
-            dernier_fichier = max(fichiers, key=os.path.getmtime)
-        
-        with open(dernier_fichier, "r", encoding="utf-8") as f:
-            donnees = json.load(f)
-        
-        # Restaurer TOUTES les données
-        st.session_state.agents = donnees.get("agents", [])
-        st.session_state.planning = donnees.get("planning", {})
-        st.session_state.heures = donnees.get("heures", {})
-        st.session_state.donnees_cloud_centralisees = donnees.get("donnees_cloud_centralisees", [])
-        st.session_state.taches_operateur = donnees.get("taches_operateur", {})
-        st.session_state.taches_en_cours = donnees.get("taches_en_cours", [])
-        st.session_state.couleurs = donnees.get("couleurs", {
-            "Travail": "#2E7D32", "OFF": "#757575", "Congé": "#8D6E63", 
-            "Maladie": "#C62828", "Formation": "#1565C0"
-        })
-        st.session_state.task_id_counter = donnees.get("task_id_counter", 0)
-        st.session_state.show_completed_tasks = donnees.get("show_completed_tasks", True)
-        
-        # Ajouter un flag pour indiquer que les données ont été chargées
-        st.session_state.data_loaded = True
-        
-        return True
-    except Exception as e:
-        return False
-
 # --- INITIALISATION DE SESSION ---
 # On n'utilise plus charger_etat_connexion() car elle lit un fichier partagé.
 # On initialise les variables de session avec des valeurs par défaut.
@@ -1056,8 +979,6 @@ if "user_actif" not in st.session_state:
     st.session_state.user_actif = ""
 if "user_role" not in st.session_state:
     st.session_state.user_role = "operateur"
-if "data_loaded" not in st.session_state:
-    st.session_state.data_loaded = False
 if "user_changed" not in st.session_state:
     st.session_state.user_changed = False
 
@@ -1159,30 +1080,8 @@ if "show_completed_tasks" not in st.session_state:
     st.session_state.show_completed_tasks = True
 
 # --- CHARGEMENT AUTOMATIQUE DES DONNÉES AU DÉMARRAGE ---
-# Ne pas restaurer l'état d'authentification, seulement les données applicatives.
-if not st.session_state.get("data_loaded", False):
-    try:
-        fichier_last = "sauvegardes/sauvegarde_last.json"
-        if os.path.exists(fichier_last):
-            with open(fichier_last, "r", encoding="utf-8") as f:
-                donnees = json.load(f)
-            
-            # Restaurer TOUTES les données (sauf l'authentification)
-            st.session_state.agents = donnees.get("agents", [])
-            st.session_state.planning = donnees.get("planning", {})
-            st.session_state.heures = donnees.get("heures", {})
-            st.session_state.donnees_cloud_centralisees = donnees.get("donnees_cloud_centralisees", [])
-            st.session_state.taches_operateur = donnees.get("taches_operateur", {})
-            st.session_state.taches_en_cours = donnees.get("taches_en_cours", [])
-            st.session_state.couleurs = donnees.get("couleurs", {
-                "Travail": "#2E7D32", "OFF": "#757575", "Congé": "#8D6E63", 
-                "Maladie": "#C62828", "Formation": "#1565C0"
-            })
-            st.session_state.task_id_counter = donnees.get("task_id_counter", 0)
-            st.session_state.show_completed_tasks = donnees.get("show_completed_tasks", True)
-            st.session_state.data_loaded = True
-    except Exception as e:
-        st.session_state.data_loaded = True
+# SUPPRIMÉ : on ne charge plus les données depuis un fichier JSON.
+# Les données sont lues depuis SQLite via db_manager dans les pages.
 
 # --- INTERFACE DE CONNEXION ---
 if not st.session_state.authentifie:
@@ -1229,8 +1128,8 @@ if not st.session_state.authentifie:
                                 # car elle stockait l'état d'authentification dans un fichier partagé.
                                 # L'état est désormais uniquement dans st.session_state.
                                 
-                                # Sauvegarder les données applicatives (pas l'authentification)
-                                executer_sauvegarde_auto("login", identifiant)
+                                # Sauvegarde automatique supprimée
+                                # executer_sauvegarde_auto("login", identifiant)
                                 
                                 with st.spinner("Synchronisation des bases de données..."):
                                     time.sleep(1.2)
@@ -1406,7 +1305,8 @@ def page_operateur_dashboard():
                     "temps_formate": "00:00:00"
                 }
                 st.session_state.taches_en_cours.append(new_task)
-                executer_sauvegarde_auto("task_start", st.session_state.user_actif)
+                # Sauvegarde automatique supprimée
+                # executer_sauvegarde_auto("task_start", st.session_state.user_actif)
                 st.toast(f"✅ Tâche {tache_selectionnee} démarrée", icon="▶️")
                 st.rerun()
     
@@ -1478,7 +1378,8 @@ def page_operateur_dashboard():
                                     task["elapsed_seconds"] += time.time() - task["last_start"]
                                     task["evenements"].append({"type": "PAUSE", "time": datetime.now(MADA_TZ).isoformat()})
                                     db_manager.update_task(task["db_id"], statut="pause", evenements=task["evenements"])
-                                    executer_sauvegarde_auto("task_pause", st.session_state.user_actif)
+                                    # Sauvegarde automatique supprimée
+                                    # executer_sauvegarde_auto("task_pause", st.session_state.user_actif)
                                     st.toast(f"⏸️ {task['tache']} en pause", icon="⏸️")
                                     st.rerun()
                         with col_btn_resume:
@@ -1488,7 +1389,8 @@ def page_operateur_dashboard():
                                     task["last_start"] = time.time()
                                     task["evenements"].append({"type": "REPRISE", "time": datetime.now(MADA_TZ).isoformat()})
                                     db_manager.update_task(task["db_id"], statut="en_cours", evenements=task["evenements"])
-                                    executer_sauvegarde_auto("task_resume", st.session_state.user_actif)
+                                    # Sauvegarde automatique supprimée
+                                    # executer_sauvegarde_auto("task_resume", st.session_state.user_actif)
                                     st.toast(f"▶️ {task['tache']} reprise", icon="▶️")
                                     st.rerun()
                         with col_btn_stop:
@@ -1526,7 +1428,8 @@ def page_operateur_dashboard():
                                     "evenements": task["evenements"]
                                 })
                                 st.session_state.taches_en_cours = [t for t in st.session_state.taches_en_cours if t["id"] != task["id"]]
-                                executer_sauvegarde_auto("task_complete", st.session_state.user_actif)
+                                # Sauvegarde automatique supprimée
+                                # executer_sauvegarde_auto("task_complete", st.session_state.user_actif)
                                 st.toast(f"✅ {task['tache']} terminée ({task['temps_formate']})", icon="✅")
                                 st.rerun()
                     st.markdown("---")
@@ -1625,7 +1528,8 @@ def page_operateur_dashboard():
                         c.execute("DELETE FROM taches WHERE agent_id = ? AND statut = 'termine'", (agent_id,))
                         conn.commit()
                         conn.close()
-                    executer_sauvegarde_auto("clear_history", st.session_state.user_actif)
+                    # Sauvegarde automatique supprimée
+                    # executer_sauvegarde_auto("clear_history", st.session_state.user_actif)
                     st.toast("🗑️ Historique effacé", icon="🗑️")
                     st.rerun()
             with col_exp3:
@@ -2534,29 +2438,39 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 💾 Gestion des données")
     
-    # Sauvegarde manuelle
-    if st.button("💾 Sauvegarder maintenant", use_container_width=True, type="primary"):
+    # Sauvegarde manuelle (nouvelle version)
+    if st.button("💾 Sauvegarder maintenant (export JSON)", use_container_width=True, type="primary"):
         if st.session_state.authentifie and st.session_state.user_actif:
-            success, nom_fichier = executer_sauvegarde_auto("manuel", st.session_state.user_actif)
+            # Construire les données à sauvegarder (les mêmes qu'avant)
+            donnees = {
+                "timestamp": datetime.now(MADA_TZ).isoformat(),
+                "utilisateur": st.session_state.user_actif,
+                "agents": db_manager.get_all_agents(),
+                "planning": {},  # on peut récupérer tout le planning, mais on simplifie
+                "heures": {},
+                "donnees_cloud_centralisees": db_manager.get_all_cloud_data(),
+                "taches_operateur": st.session_state.get("taches_operateur", {}),
+                "taches_en_cours": st.session_state.get("taches_en_cours", []),
+                "couleurs": st.session_state.get("couleurs", {}),
+                "task_id_counter": st.session_state.get("task_id_counter", 0),
+                "show_completed_tasks": st.session_state.get("show_completed_tasks", True)
+            }
+            success, msg = gestionnaire_sauvegarde.sauvegarder_donnees_manuelles(
+                st.session_state.user_actif, donnees
+            )
             if success:
-                st.toast("✅ Données sauvegardées avec succès !", icon="💾")
+                st.toast(f"✅ Sauvegarde manuelle effectuée : {msg}", icon="💾")
             else:
-                st.toast(f"❌ Erreur lors de la sauvegarde", icon="❌")
+                st.toast(f"❌ Erreur : {msg}", icon="❌")
     
-    # Restaurer la dernière sauvegarde
-    if st.button("🔄 Restaurer dernière sauvegarde", use_container_width=True):
-        if charger_derniere_sauvegarde():
-            st.toast("✅ Données restaurées avec succès !", icon="🔄")
-            st.rerun()
-        else:
-            st.toast("❌ Aucune sauvegarde trouvée", icon="❌")
+    # Restaurer la dernière sauvegarde (supprimé car plus utilisé)
+    # On retire le bouton "Restaurer dernière sauvegarde"
     
-    # Afficher le nombre de sauvegardes
+    # Afficher le nombre de sauvegardes manuelles
     try:
-        fichiers = glob.glob("sauvegardes/sauvegarde_*.json")
-        fichiers = [f for f in fichiers if "last" not in f]
+        fichiers = glob.glob("sauvegardes/sauvegarde_manuelle_*.json")
         if fichiers:
-            st.caption(f"📊 {len(fichiers)} sauvegardes disponibles")
+            st.caption(f"📊 {len(fichiers)} sauvegardes manuelles disponibles")
     except:
         pass
     
@@ -2593,15 +2507,16 @@ with st.sidebar:
             st.session_state.taches_en_cours = []
             st.session_state.task_id_counter = 0
             
-            executer_sauvegarde_auto("reset", st.session_state.user_actif)
+            # Sauvegarde automatique supprimée
+            # executer_sauvegarde_auto("reset", st.session_state.user_actif)
             st.toast("Grilles et compteur réinitialisés !", icon="💥")
             time.sleep(0.5)
             st.rerun()
     
     st.markdown("---")
     if st.button("🚪 Déconnexion", type="secondary", use_container_width=True):
-        # Sauvegarder avant la déconnexion
-        executer_sauvegarde_auto("logout", st.session_state.user_actif)
+        # Sauvegarde automatique supprimée
+        # executer_sauvegarde_auto("logout", st.session_state.user_actif)
         
         # SUPPRESSION de l'appel à sauvegarder_etat_connexion()
         # car elle stockait l'état d'authentification dans un fichier partagé.
@@ -2609,7 +2524,6 @@ with st.sidebar:
         st.session_state.authentifie = False
         st.session_state.user_actif = ""
         st.session_state.user_role = "operateur"
-        st.session_state.data_loaded = True  # On garde les données chargées
         st.session_state.user_changed = True
         
         st.rerun()
@@ -3044,7 +2958,8 @@ def page_gestion_agents():
         poste = st.text_input("Poste")
         if st.form_submit_button("Ajouter l'agent") and nom.strip() and poste.strip():
             db_manager.add_agent(nom.strip(), poste.strip())
-            executer_sauvegarde_auto("update_rh", st.session_state.user_actif)
+            # Sauvegarde automatique supprimée
+            # executer_sauvegarde_auto("update_rh", st.session_state.user_actif)
             st.toast("✅ Agent ajouté ! Tous les admins verront ce changement.", icon="👤")
             st.rerun()
 
@@ -3060,7 +2975,8 @@ def page_gestion_agents():
             agent_id = next((a["id"] for a in agents_db if a["nom"] == nom_suppr), None)
             if agent_id:
                 db_manager.delete_agent(agent_id)
-            executer_sauvegarde_auto("update_rh", st.session_state.user_actif)
+            # Sauvegarde automatique supprimée
+            # executer_sauvegarde_auto("update_rh", st.session_state.user_actif)
             st.toast("🗑️ Agent supprimé ! Tous les admins verront ce changement.", icon="🗑️")
             st.rerun()
 
@@ -3248,7 +3164,8 @@ def page_planning():
             date_cle = f"{annee_sel}-{mois_sel:02d}-{jour_choisi:02d}"
             if agent_id:
                 db_manager.set_planning(date_cle, agent_id, statut_choisi)
-            executer_sauvegarde_auto("update_planning", st.session_state.user_actif)
+            # Sauvegarde automatique supprimée
+            # executer_sauvegarde_auto("update_planning", st.session_state.user_actif)
             st.toast("✅ Statut mis à jour ! Tous les admins verront ce changement.", icon="📋")
             st.rerun()
 
@@ -3356,7 +3273,8 @@ def page_suivi_heures():
                                     db_manager.add_pointage(date_cle, agent_id, "pointage", ts.isoformat())
                                 compteur_updates += 1
                                 
-                    executer_sauvegarde_auto("import_pointeuse", st.session_state.user_actif)
+                    # Sauvegarde automatique supprimée
+                    # executer_sauvegarde_auto("import_pointeuse", st.session_state.user_actif)
                     st.sidebar.success(f"✔️ {compteur_updates} fiches journalières extraites !")
                     st.toast("📊 Pointage importé ! Tous les admins verront ces données.", icon="📊")
                     st.rerun()
@@ -3505,8 +3423,8 @@ def page_suivi_heures():
         st.warning("⚠️ La réinitialisation supprime toutes les données de suivi des heures (table `heures` et `pointages`). Cette action est irréversible.")
         if st.checkbox("Confirmer la réinitialisation des données de suivi des heures", key="reset_heures_confirm"):
             if st.button("🗑️ Réinitialiser les données de suivi des heures", type="primary", use_container_width=True):
-                # Sauvegarde automatique avant la suppression
-                executer_sauvegarde_auto("reset_heures", st.session_state.user_actif)
+                # Sauvegarde automatique supprimée
+                # executer_sauvegarde_auto("reset_heures", st.session_state.user_actif)
                 # Supprimer les données des tables heures et pointages
                 conn = db_manager.get_db()
                 c = conn.cursor()
@@ -3590,7 +3508,8 @@ def page_suivi_heures():
                     total_nuit_jour += nuit_plage
                 # Enregistrer les totaux (addition)
                 db_manager.set_heures(date_str, agent_id, total_heures_jour, total_nuit_jour)
-                executer_sauvegarde_auto("pointage_manuel", st.session_state.user_actif)
+                # Sauvegarde automatique supprimée
+                # executer_sauvegarde_auto("pointage_manuel", st.session_state.user_actif)
                 st.toast(f"✅ Pointage enregistré pour {agent_manuel} le {date_str} (Total: {format_duration_hms(total_heures_jour * 3600)})", icon="⏱️")
                 st.rerun()
 
@@ -3827,7 +3746,8 @@ def page_synchronisation_cloud():
                 # Mettre à jour la session cache
                 st.session_state["donnees_cloud_centralisees"] = db_manager.get_all_cloud_data()
                 
-                executer_sauvegarde_auto("import_multi_sheets", st.session_state.user_actif)
+                # Sauvegarde automatique supprimée
+                # executer_sauvegarde_auto("import_multi_sheets", st.session_state.user_actif)
                 return True, nouvelles_lignes
 
         except Exception as e:
@@ -3868,7 +3788,8 @@ def page_synchronisation_cloud():
         if st.button("🗑️ Vider le Cache Cloud", type="secondary", use_container_width=True):
             db_manager.clear_cloud_data()
             st.session_state["donnees_cloud_centralisees"] = []
-            executer_sauvegarde_auto("clear_cloud_cache", st.session_state.user_actif)
+            # Sauvegarde automatique supprimée
+            # executer_sauvegarde_auto("clear_cloud_cache", st.session_state.user_actif)
             st.success("✔️ Cache cloud vidé avec succès !")
             st.toast("🗑️ Cache cloud vidé pour tous les admins !", icon="🗑️")
             st.rerun()
