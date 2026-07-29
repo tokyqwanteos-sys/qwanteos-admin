@@ -3,3 +3,6 @@ pandas
 plotly
 requests
 openpyxl
+gspread
+google-auth
+oauth2client
