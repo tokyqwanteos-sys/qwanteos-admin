@@ -17,8 +17,12 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import base64
 from PIL import Image
+from zoneinfo import ZoneInfo
 
 import db_manager  # ← Nouvel import
+
+# --- FUSEAU HORAIRE MADAGASCAR (UTC+3) ---
+MADA_TZ = ZoneInfo("Indian/Antananarivo")
 
 # --- LISTE GLOBALE DES TÂCHES DISPONIBLES (utilisée dans plusieurs pages) ---
 TACHES_DISPONIBLES = [
@@ -56,7 +60,7 @@ init_shared_tasks_table()
 def add_shared_task(tache, match_info="", wf="", ligue="", remarques="", assigne_a=None, statut="disponible"):
     conn = db_manager.get_db()
     c = conn.cursor()
-    date_creation = datetime.now().isoformat()
+    date_creation = datetime.now(MADA_TZ).isoformat()
     c.execute(
         "INSERT INTO shared_tasks (tache, match_info, wf, ligue, remarques, date_creation, assigne_a, statut) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (tache, match_info, wf, ligue, remarques, date_creation, assigne_a, statut)
@@ -190,16 +194,32 @@ def migrer_donnees():
 # Exécuter la migration
 migrer_donnees()
 
-# --- NOUVELLE FONCTION DE FORMATAGE DES DATES ISO ---
+# --- NOUVELLE FONCTION DE FORMATAGE DES DATES ISO (avec fuseau Madagascar) ---
 def formater_datetime_iso(iso_str):
-    """Convertit une chaîne ISO (2026-07-28T10:47:02.749190) en 28/07/2026 10:47:02"""
+    """Convertit une chaîne ISO en date/heure locale Madagascar (format DD/MM/YYYY HH:MM:SS)"""
     if not iso_str:
         return ""
     try:
+        # Parser en naive puis attribuer le fuseau MADA
         dt = datetime.fromisoformat(iso_str)
+        # Si la chaîne n'a pas de fuseau, on la considère comme locale MADA
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=MADA_TZ)
         return dt.strftime("%d/%m/%Y %H:%M:%S")
     except:
         return iso_str
+
+# --- FONCTION DE FORMATAGE DES DURÉES EN HH:MM:SS ---
+def format_duration_hms(seconds):
+    """Convertit un nombre de secondes en chaîne HH:MM:SS (avec gestion des négatifs)"""
+    if seconds is None or pd.isna(seconds):
+        return "00:00:00"
+    signe = "-" if seconds < 0 else ""
+    seconds = abs(seconds)
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{signe}{h:02d}:{m:02d}:{s:02d}"
 
 # --- GESTION DES COMPTES UTILISATEURS ---
 def hash_password(password):
@@ -244,7 +264,7 @@ def log_connection_attempt(username, success, ip="127.0.0.1"):
     """Journalise les tentatives de connexion"""
     log_file = "sauvegardes/connection_log.json"
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(MADA_TZ).isoformat(),
         "username": username,
         "success": success,
         "ip": ip
@@ -288,7 +308,7 @@ def register_user(username, password, full_name="", role="operateur", access_cod
         "password": hash_password(password),
         "full_name": full_name,
         "role": role,
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(MADA_TZ).isoformat(),
         "last_login": None,
         "login_attempts": 0,
         "locked_until": None
@@ -311,8 +331,11 @@ def authenticate_user(username, password):
     # Vérifier si le compte est bloqué
     if user.get("locked_until"):
         lock_time = datetime.fromisoformat(user["locked_until"])
-        if datetime.now() < lock_time:
-            remaining = (lock_time - datetime.now()).seconds // 60
+        # Attribuer le fuseau MADA (si nécessaire)
+        if lock_time.tzinfo is None:
+            lock_time = lock_time.replace(tzinfo=MADA_TZ)
+        if datetime.now(MADA_TZ) < lock_time:
+            remaining = (lock_time - datetime.now(MADA_TZ)).seconds // 60
             return False, f"Compte bloqué pour {remaining} minutes"
     
     # Vérifier le mot de passe
@@ -320,7 +343,7 @@ def authenticate_user(username, password):
         # Réinitialiser les tentatives
         user["login_attempts"] = 0
         user["locked_until"] = None
-        user["last_login"] = datetime.now().isoformat()
+        user["last_login"] = datetime.now(MADA_TZ).isoformat()
         save_users(users)
         log_connection_attempt(username, True)
         
@@ -333,7 +356,7 @@ def authenticate_user(username, password):
         
         # Bloquer après 5 tentatives
         if user["login_attempts"] >= 5:
-            user["locked_until"] = (datetime.now() + timedelta(minutes=15)).isoformat()
+            user["locked_until"] = (datetime.now(MADA_TZ) + timedelta(minutes=15)).isoformat()
             log_connection_attempt(username, False)
             save_users(users)
             return False, "Compte bloqué pour 15 minutes (trop de tentatives)"
@@ -468,7 +491,7 @@ def exporter_vers_google_sheets(utilisateur, df_export, spreadsheet_id):
 # --- CONFIGURATION DE L'APPLICATION ---
 st.set_page_config(page_title="Qwanteos-Setup Admin", layout="wide", page_icon="⚙️")
 
-# --- STYLE DARK TECH AVEC PARTICULES ANIMÉES ---
+# --- STYLE DARK TECH AVEC PARTICULES ANIMÉES (polices réduites) ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -505,7 +528,6 @@ st.markdown("""
         animation: floatParticle 20s infinite alternate ease-in-out;
     }
     
-    /* Tailles et positions aléatoires (générées en JS via la classe) */
     .particle:nth-child(1) { width: 4px; height: 4px; top: 10%; left: 5%; animation-duration: 22s; animation-delay: 0s; }
     .particle:nth-child(2) { width: 6px; height: 6px; top: 30%; left: 80%; animation-duration: 25s; animation-delay: 2s; }
     .particle:nth-child(3) { width: 3px; height: 3px; top: 60%; left: 20%; animation-duration: 18s; animation-delay: 4s; }
@@ -525,7 +547,6 @@ st.markdown("""
         100% { transform: translate(-10px, 10px) scale(1); opacity: 0.3; }
     }
     
-    /* Lignes de réseau (effet grille) */
     .grid-lines {
         position: fixed;
         top: 0;
@@ -566,12 +587,12 @@ st.markdown("""
         to { opacity: 1; transform: translateY(0); }
     }
     
-    /* Métriques sombres */
+    /* Métriques sombres - tailles réduites */
     div[data-testid="stMetric"] {
         background: rgba(12, 18, 34, 0.6);
         backdrop-filter: blur(12px);
         border-radius: 16px;
-        padding: 16px 20px;
+        padding: 14px 18px;
         border: 1px solid rgba(100, 180, 255, 0.06);
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         transition: all 0.25s ease;
@@ -585,13 +606,14 @@ st.markdown("""
     div[data-testid="stMetricValue"] {
         color: #d0e4ff;
         font-weight: 600;
+        font-size: 1.4rem;
         letter-spacing: -0.02em;
         text-shadow: 0 0 20px rgba(100, 180, 255, 0.1);
     }
     div[data-testid="stMetricLabel"] {
         color: #7a9bcb;
         font-weight: 400;
-        font-size: 0.8rem;
+        font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.06em;
     }
@@ -602,8 +624,9 @@ st.markdown("""
         backdrop-filter: blur(8px);
         border: 1px solid rgba(100, 180, 255, 0.1);
         border-radius: 14px;
-        padding: 8px 24px;
+        padding: 6px 20px;
         font-weight: 500;
+        font-size: 0.85rem;
         color: #b0ccee;
         transition: all 0.25s ease;
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
@@ -625,7 +648,7 @@ st.markdown("""
         box-shadow: 0 8px 30px rgba(26, 74, 122, 0.5);
     }
     
-    /* Titres lumineux */
+    /* Titres lumineux - tailles réduites */
     h1, h2, h3 {
         color: #d0e4ff;
         font-weight: 600;
@@ -633,18 +656,24 @@ st.markdown("""
         text-shadow: 0 0 30px rgba(100, 180, 255, 0.05);
     }
     h1 {
-        font-size: 2.2rem;
+        font-size: 1.8rem;
         font-weight: 700;
     }
     h1::after {
         content: '';
         display: block;
-        width: 48px;
-        height: 3px;
+        width: 40px;
+        height: 2px;
         background: linear-gradient(90deg, #4a8ecf, #1a4a7a);
         border-radius: 2px;
-        margin-top: 6px;
+        margin-top: 4px;
         box-shadow: 0 0 20px rgba(74, 142, 207, 0.3);
+    }
+    h2 {
+        font-size: 1.4rem;
+    }
+    h3 {
+        font-size: 1.1rem;
     }
     
     /* Sidebar sombre */
@@ -660,7 +689,8 @@ st.markdown("""
         background: rgba(12, 18, 34, 0.6);
         border: 1px solid rgba(100, 180, 255, 0.08);
         border-radius: 12px;
-        padding: 10px 14px;
+        padding: 8px 12px;
+        font-size: 0.9rem;
         color: #d0e4ff;
         transition: all 0.25s ease;
         backdrop-filter: blur(8px);
@@ -696,6 +726,7 @@ st.markdown("""
         border-left: 4px solid #4a8ecf;
         animation: slideInRight 0.4s ease-out;
         color: #d0e4ff;
+        font-size: 0.9rem;
     }
     @keyframes slideInRight {
         from { opacity: 0; transform: translateX(30px); }
@@ -707,7 +738,7 @@ st.markdown("""
         display: inline-block;
         padding: 4px 14px;
         border-radius: 20px;
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         font-weight: 500;
         background: rgba(74, 142, 207, 0.12);
         color: #8bb8ff;
@@ -733,7 +764,7 @@ st.markdown("""
         background: rgba(12, 18, 34, 0.5);
         backdrop-filter: blur(8px);
         border-radius: 14px;
-        padding: 14px 18px;
+        padding: 12px 16px;
         margin-bottom: 10px;
         border-left: 3px solid #4a8ecf;
         transition: all 0.2s ease;
@@ -753,7 +784,7 @@ st.markdown("""
     .task-timer {
         font-family: 'Inter', monospace;
         font-weight: 600;
-        font-size: 1.6rem;
+        font-size: 1.3rem;
         color: #4a8ecf;
         letter-spacing: 0.04em;
         text-shadow: 0 0 20px rgba(74, 142, 207, 0.2);
@@ -765,7 +796,7 @@ st.markdown("""
         display: inline-block;
         padding: 2px 12px;
         border-radius: 12px;
-        font-size: 0.7rem;
+        font-size: 0.65rem;
         font-weight: 500;
         text-transform: uppercase;
         background: rgba(74, 222, 128, 0.12);
@@ -793,6 +824,7 @@ st.markdown("""
     .chat-message .sender {
         font-weight: 600;
         color: #8bb8ff;
+        font-size: 0.9rem;
     }
     .chat-message .timestamp {
         font-size: 0.7rem;
@@ -802,6 +834,7 @@ st.markdown("""
     .chat-message .content {
         margin-top: 6px;
         color: #d0e4ff;
+        font-size: 0.9rem;
     }
     
     /* Bouton flottant chat */
@@ -813,12 +846,12 @@ st.markdown("""
         background: linear-gradient(135deg, #1a4a7a, #0d2b4a);
         color: white;
         border-radius: 50%;
-        width: 60px;
-        height: 60px;
+        width: 56px;
+        height: 56px;
         display: flex;
         justify-content: center;
         align-items: center;
-        font-size: 1.6rem;
+        font-size: 1.4rem;
         box-shadow: 0 8px 30px rgba(26, 74, 122, 0.4);
         transition: all 0.3s ease;
         border: 1px solid rgba(100, 180, 255, 0.15);
@@ -837,7 +870,7 @@ st.markdown("""
         color: white;
         border-radius: 50%;
         padding: 0 6px;
-        font-size: 0.7rem;
+        font-size: 0.65rem;
         font-weight: 600;
         min-width: 20px;
         text-align: center;
@@ -860,7 +893,7 @@ st.markdown("""
         z-index: 1;
     }
     .welcome-title {
-        font-size: 2.8rem;
+        font-size: 2.2rem;
         font-weight: 700;
         color: #d0e4ff;
         letter-spacing: -0.03em;
@@ -868,12 +901,12 @@ st.markdown("""
     }
     .welcome-subtitle {
         color: #7a9bcb;
-        font-size: 1.1rem;
+        font-size: 1rem;
         margin-top: 4px;
     }
     .welcome-credit {
         color: #4a8ecf;
-        font-size: 1.2rem;
+        font-size: 1rem;
         font-weight: 500;
         letter-spacing: 0.06em;
         margin-top: 20px;
@@ -883,20 +916,21 @@ st.markdown("""
         background: rgba(8, 12, 24, 0.5);
         backdrop-filter: blur(16px);
         border-radius: 24px;
-        padding: 32px;
+        padding: 28px;
         border: 1px solid rgba(100, 180, 255, 0.06);
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
     }
     
     /* Responsive */
     @media (max-width: 768px) {
-        .welcome-title { font-size: 2rem; }
-        .welcome-container { padding: 28px 16px; }
+        .welcome-title { font-size: 1.8rem; }
+        .welcome-container { padding: 24px 16px; }
     }
     
     /* Couleur du texte général */
     p, div, span, label {
         color: #d0e4ff !important;
+        font-size: 0.9rem;
     }
     .css-1d391kg p, .css-1d391kg div, .css-1d391kg span {
         color: #d0e4ff !important;
@@ -940,7 +974,7 @@ def executer_sauvegarde_auto(type_evenement, utilisateur):
         
         # Récupérer TOUTES les données de session
         donnees = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(MADA_TZ).isoformat(),
             "utilisateur": utilisateur,
             "type_evenement": type_evenement,
             "agents": st.session_state.get("agents", []),
@@ -955,7 +989,7 @@ def executer_sauvegarde_auto(type_evenement, utilisateur):
         }
         
         # Sauvegarde avec horodatage - TOUTES les sauvegardes sont conservées
-        horodatage = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        horodatage = datetime.now(MADA_TZ).strftime("%Y%m%d_%H%M%S_%f")
         nom_fichier = f"sauvegardes/sauvegarde_{type_evenement}_{horodatage}.json"
         
         with open(nom_fichier, "w", encoding="utf-8") as f:
@@ -1043,7 +1077,7 @@ def send_chat_message(username, full_name, message, attachment_base64=None):
     data_str = json.dumps(data, ensure_ascii=False)
     c.execute(
         "INSERT INTO messages (username, full_name, message, timestamp) VALUES (?, ?, ?, ?)",
-        (username, full_name, data_str, datetime.now().isoformat())
+        (username, full_name, data_str, datetime.now(MADA_TZ).isoformat())
     )
     conn.commit()
     conn.close()
@@ -1068,12 +1102,21 @@ def get_chat_messages(limit=50):
         except:
             text = msg_json
             attachment = None
+        # Formater la date en local MADA
+        try:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=MADA_TZ)
+            ts_formatted = dt.strftime("%d/%m/%Y %H:%M:%S")
+        except:
+            ts_formatted = ts
         messages.append({
             "username": username,
             "full_name": full_name,
             "text": text,
             "attachment": attachment,
-            "timestamp": ts
+            "timestamp": ts_formatted,
+            "raw_ts": ts
         })
     return messages
 
@@ -1279,7 +1322,7 @@ def page_operateur_dashboard():
             backdrop-filter: blur(8px);
         ">
             <span style="color: #8bb8ff; font-weight: 500;">▸ {st.session_state.user_actif}</span>
-            <span style="color: #5a7a9a; margin-left: 20px; font-size: 0.85em;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #5a7a9a; margin-left: 20px; font-size: 0.85em;">{datetime.now(MADA_TZ).strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1291,6 +1334,8 @@ def page_operateur_dashboard():
             df_mes_taches = pd.DataFrame(mes_taches)
             df_mes_taches = df_mes_taches[["tache", "match_info", "wf", "ligue", "remarques", "date_creation"]]
             df_mes_taches.columns = ["Tâche", "Match", "WF", "Ligue", "Remarques", "Date création"]
+            # Formater les dates de création
+            df_mes_taches["Date création"] = df_mes_taches["Date création"].apply(formater_datetime_iso)
             st.dataframe(df_mes_taches, use_container_width=True, hide_index=True)
         else:
             st.info("Aucune tâche assignée pour le moment.")
@@ -1328,8 +1373,8 @@ def page_operateur_dashboard():
                 task_id = st.session_state.task_id_counter + 1
                 st.session_state.task_id_counter = task_id
                 
-                evenements = [{"type": "START", "time": datetime.now().isoformat()}]
-                date_debut = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                evenements = [{"type": "START", "time": datetime.now(MADA_TZ).isoformat()}]
+                date_debut = datetime.now(MADA_TZ).strftime("%d/%m/%Y %H:%M:%S")
                 
                 db_id = db_manager.add_task(
                     agent_id=agent_id,
@@ -1339,7 +1384,7 @@ def page_operateur_dashboard():
                     ligue=ligue_info if ligue_info else "",
                     remarques=remarques_info if remarques_info else "",
                     statut="en_cours",
-                    date_debut=datetime.now().isoformat(),
+                    date_debut=datetime.now(MADA_TZ).isoformat(),
                     evenements=evenements
                 )
                 
@@ -1352,13 +1397,13 @@ def page_operateur_dashboard():
                     "ligue": ligue_info or "",
                     "remarques": remarques_info or "",
                     "statut": "en_cours",
-                    "start_time": datetime.now().isoformat(),
+                    "start_time": datetime.now(MADA_TZ).isoformat(),
                     "elapsed_seconds": 0,
                     "last_start": time.time(),
                     "evenements": evenements,
                     "date_debut": date_debut,
                     "temps_total_secondes": 0,
-                    "temps_formate": "00h00m00s"
+                    "temps_formate": "00:00:00"
                 }
                 st.session_state.taches_en_cours.append(new_task)
                 executer_sauvegarde_auto("task_start", st.session_state.user_actif)
@@ -1390,9 +1435,11 @@ def page_operateur_dashboard():
                 else:
                     elapsed = task["elapsed_seconds"]
                 
-                heures = int(elapsed // 3600)
-                minutes = int((elapsed % 3600) // 60)
-                secondes = int(elapsed % 60)
+                # Format HH:MM:SS
+                h = int(elapsed // 3600)
+                m = int((elapsed % 3600) // 60)
+                s = int(elapsed % 60)
+                time_str = f"{h:02d}:{m:02d}:{s:02d}"
                 
                 if task["statut"] == "en_cours":
                     status_class = "running"
@@ -1418,8 +1465,8 @@ def page_operateur_dashboard():
                         """, unsafe_allow_html=True)
                     with cols[1]:
                         st.markdown(f"""
-                            <div style="text-align: center; font-size: 1.4em; font-weight: 600; font-family: 'Inter', monospace; color: {border_color};">
-                                {heures:02d}:{minutes:02d}:{secondes:02d}
+                            <div style="text-align: center; font-size: 1.3em; font-weight: 600; font-family: 'Inter', monospace; color: {border_color};">
+                                {time_str}
                             </div>
                         """, unsafe_allow_html=True)
                     with cols[2]:
@@ -1429,7 +1476,7 @@ def page_operateur_dashboard():
                                 if st.button("⏸️", key=f"pause_{task['id']}", help="Pause"):
                                     task["statut"] = "pause"
                                     task["elapsed_seconds"] += time.time() - task["last_start"]
-                                    task["evenements"].append({"type": "PAUSE", "time": datetime.now().isoformat()})
+                                    task["evenements"].append({"type": "PAUSE", "time": datetime.now(MADA_TZ).isoformat()})
                                     db_manager.update_task(task["db_id"], statut="pause", evenements=task["evenements"])
                                     executer_sauvegarde_auto("task_pause", st.session_state.user_actif)
                                     st.toast(f"⏸️ {task['tache']} en pause", icon="⏸️")
@@ -1439,7 +1486,7 @@ def page_operateur_dashboard():
                                 if st.button("▶️", key=f"resume_{task['id']}", help="Reprendre"):
                                     task["statut"] = "en_cours"
                                     task["last_start"] = time.time()
-                                    task["evenements"].append({"type": "REPRISE", "time": datetime.now().isoformat()})
+                                    task["evenements"].append({"type": "REPRISE", "time": datetime.now(MADA_TZ).isoformat()})
                                     db_manager.update_task(task["db_id"], statut="en_cours", evenements=task["evenements"])
                                     executer_sauvegarde_auto("task_resume", st.session_state.user_actif)
                                     st.toast(f"▶️ {task['tache']} reprise", icon="▶️")
@@ -1448,19 +1495,16 @@ def page_operateur_dashboard():
                             if st.button("⏹️", key=f"stop_{task['id']}", help="Terminer"):
                                 if task["statut"] == "en_cours":
                                     task["elapsed_seconds"] += time.time() - task["last_start"]
-                                task["evenements"].append({"type": "FIN", "time": datetime.now().isoformat()})
+                                task["evenements"].append({"type": "FIN", "time": datetime.now(MADA_TZ).isoformat()})
                                 task["statut"] = "termine"
-                                task["date_fin"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                                task["date_fin"] = datetime.now(MADA_TZ).strftime("%d/%m/%Y %H:%M:%S")
                                 task["temps_total_secondes"] = task["elapsed_seconds"]
-                                heures_fin = int(task["elapsed_seconds"] // 3600)
-                                minutes_fin = int((task["elapsed_seconds"] % 3600) // 60)
-                                secondes_fin = int(task["elapsed_seconds"] % 60)
-                                task["temps_formate"] = f"{heures_fin:02d}h{minutes_fin:02d}m{secondes_fin:02d}s"
+                                task["temps_formate"] = format_duration_hms(task["elapsed_seconds"])
                                 
                                 db_manager.update_task(
                                     task["db_id"],
                                     statut="termine",
-                                    date_fin=datetime.now().isoformat(),
+                                    date_fin=datetime.now(MADA_TZ).isoformat(),
                                     temps_total_secondes=task["elapsed_seconds"],
                                     temps_formate=task["temps_formate"],
                                     evenements=task["evenements"]
@@ -1498,7 +1542,7 @@ def page_operateur_dashboard():
                     st.session_state.show_completed_tasks = show_tasks
                 if st.session_state.show_completed_tasks:
                     for task in taches_terminees:
-                        with st.expander(f"{task['tache']} - {task.get('temps_formate', 'N/A')}"):
+                        with st.expander(f"{task['tache']} - {task.get('temps_formate', '00:00:00')}"):
                             col_det1, col_det2 = st.columns(2)
                             with col_det1:
                                 st.write(f"**Match:** {task.get('match', 'N/A')}")
@@ -1507,7 +1551,7 @@ def page_operateur_dashboard():
                             with col_det2:
                                 st.write(f"**Début:** {task.get('date_debut', 'N/A')}")
                                 st.write(f"**Fin:** {task.get('date_fin', 'N/A')}")
-                                st.write(f"**Temps:** {task.get('temps_formate', 'N/A')}")
+                                st.write(f"**Temps:** {task.get('temps_formate', '00:00:00')}")
                             if task.get('remarques'):
                                 st.write(f"**Remarques:** {task['remarques']}")
                 else:
@@ -1524,7 +1568,7 @@ def page_operateur_dashboard():
                     "Date Début": entry.get("date_debut", "N/A"),
                     "Date Fin": entry.get("date_fin", "N/A"),
                     "Tâche": tache,
-                    "Temps": entry.get("temps_formate", "N/A"),
+                    "Temps": entry.get("temps_formate", "00:00:00"),
                     "Temps (sec)": entry.get("temps_secondes", 0),
                     "MATCH": entry.get("match", "N/A"),
                     "WF": entry.get("wf", "N/A"),
@@ -1540,17 +1584,11 @@ def page_operateur_dashboard():
                 st.metric("Total Tâches", len(historique_data))
             with col_met_b:
                 total_temps = sum([entry.get("Temps (sec)", 0) for entry in historique_data])
-                heures_tot = int(total_temps // 3600)
-                min_tot = int((total_temps % 3600) // 60)
-                sec_tot = int(total_temps % 60)
-                st.metric("Temps Total", f"{heures_tot:02d}h{min_tot:02d}m{sec_tot:02d}s")
+                st.metric("Temps Total", format_duration_hms(total_temps))
             with col_met_c:
                 if len(historique_data) > 0:
                     temps_moyen = total_temps / len(historique_data)
-                    h_moy = int(temps_moyen // 3600)
-                    m_moy = int((temps_moyen % 3600) // 60)
-                    s_moy = int(temps_moyen % 60)
-                    st.metric("Temps Moyen", f"{h_moy:02d}h{m_moy:02d}m{s_moy:02d}s")
+                    st.metric("Temps Moyen", format_duration_hms(temps_moyen))
             with col_met_d:
                 types_counts = df_historique["Tâche"].value_counts()
                 if not types_counts.empty:
@@ -1569,7 +1607,7 @@ def page_operateur_dashboard():
                     st.download_button(
                         label="📥 Télécharger",
                         data=csv,
-                        file_name=f"historique_taches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        file_name=f"historique_taches_{datetime.now(MADA_TZ).strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv"
                     )
             with col_exp2:
@@ -1682,7 +1720,7 @@ def page_operateur_resume():
         ">
             <span style="color: #8bb8ff; font-weight: 500;">▸ Connecté :</span>
             <span style="color: #d0e4ff;">{st.session_state.user_actif}</span>
-            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now(MADA_TZ).strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -1715,7 +1753,7 @@ def page_operateur_resume():
             annee_sel = st.selectbox("Année", [2026, 2027], index=0, key="resume_yr")
         with col_date2:
             mois_options = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
-            mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], index=datetime.now().month - 1, key="resume_mo")
+            mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], index=datetime.now(MADA_TZ).month - 1, key="resume_mo")
         
         cal = calendar.Calendar(firstweekday=0)
         semaines_du_mois = cal.monthdayscalendar(annee_sel, mois_sel)
@@ -1776,14 +1814,14 @@ def page_operateur_resume():
                 "Sélectionner le mois",
                 list(mois_options.keys()),
                 format_func=lambda x: mois_options[x],
-                index=datetime.now().month - 1,
+                index=datetime.now(MADA_TZ).month - 1,
                 key="resume_heures_mo"
             )
         
         # Calculer les heures pour l'agent
         heures_agent = []
-        total_heures_mois = 0
-        total_heures_nuit_mois = 0
+        total_heures_mois = 0.0
+        total_heures_nuit_mois = 0.0
         jours_travailles = 0
         
         _, max_jours = calendar.monthrange(annee_sel, mois_heures)
@@ -1800,8 +1838,8 @@ def page_operateur_resume():
                     heures_agent.append({
                         "Date": f"{jour:02d}/{mois_heures:02d}/{annee_sel}",
                         "Jour": noms_jours[dt_obj.weekday()],
-                        "Heures": formater_en_duree(heures),
-                        "Heures Nuit": formater_en_duree(heures_nuit),
+                        "Heures": format_duration_hms(heures * 3600),
+                        "Heures Nuit": format_duration_hms(heures_nuit * 3600),
                         "Heures (num)": heures
                     })
                     total_heures_mois += heures
@@ -1821,13 +1859,13 @@ def page_operateur_resume():
             with col_h1:
                 st.metric("📅 Jours travaillés", jours_travailles)
             with col_h2:
-                st.metric("⏱️ Total Heures", formater_en_duree(total_heures_mois))
+                st.metric("⏱️ Total Heures", format_duration_hms(total_heures_mois * 3600))
             with col_h3:
-                st.metric("🌙 Heures de Nuit", formater_en_duree(total_heures_nuit_mois))
+                st.metric("🌙 Heures de Nuit", format_duration_hms(total_heures_nuit_mois * 3600))
             with col_h4:
                 if jours_travailles > 0:
                     moyenne = total_heures_mois / jours_travailles
-                    st.metric("📊 Moyenne/Jour", formater_en_duree(moyenne))
+                    st.metric("📊 Moyenne/Jour", format_duration_hms(moyenne * 3600))
         else:
             st.info("📋 Aucune heure enregistrée pour ce mois.")
         
@@ -1842,7 +1880,7 @@ def page_operateur_resume():
                 taches_agent.append({
                     "Date": entry.get("date_debut", "N/A"),
                     "Tâche": tache,
-                    "Temps": entry.get("temps_formate", "N/A"),
+                    "Temps": entry.get("temps_formate", "00:00:00"),
                     "Temps (sec)": entry.get("temps_secondes", 0),
                     "MATCH": entry.get("match", "N/A"),
                     "WF": entry.get("wf", "N/A"),
@@ -1858,17 +1896,11 @@ def page_operateur_resume():
                 st.metric("📋 Total Tâches", len(taches_agent))
             with col_m2:
                 total_tps = sum([t.get("Temps (sec)", 0) for t in taches_agent])
-                h = int(total_tps // 3600)
-                m = int((total_tps % 3600) // 60)
-                s = int(total_tps % 60)
-                st.metric("⏱️ Temps Total", f"{h:02d}h{m:02d}m{s:02d}s")
+                st.metric("⏱️ Temps Total", format_duration_hms(total_tps))
             with col_m3:
                 if len(taches_agent) > 0:
                     moy = total_tps / len(taches_agent)
-                    h_m = int(moy // 3600)
-                    m_m = int((moy % 3600) // 60)
-                    s_m = int(moy % 60)
-                    st.metric("📊 Temps Moyen", f"{h_m:02d}h{m_m:02d}m{s_m:02d}s")
+                    st.metric("📊 Temps Moyen", format_duration_hms(moy))
             
             # Afficher les tâches
             st.dataframe(
@@ -1903,7 +1935,41 @@ def page_operateur_resume():
             {', '.join([a['nom'] for a in agents_db])}
         """)
 
-# --- NOUVELLE PAGE : STATISTIQUES & ANALYSES (OPÉRATEUR) ---
+# --- FONCTION DE CALCUL DU TEMPS DE NUIT (entre 22h et 5h) ---
+def calculer_temps_nuit(dt_debut, dt_fin):
+    """
+    Calcule le nombre de secondes entre dt_debut et dt_fin qui tombent
+    dans la plage nocturne [22h00, 05h00[ (heure locale Madagascar).
+    Les dt doivent être des objets datetime avec fuseau (ou naive).
+    """
+    if dt_debut is None or dt_fin is None:
+        return 0
+    if dt_debut >= dt_fin:
+        return 0
+    # S'assurer que les dates ont un fuseau (si naive, on lui attribue MADA_TZ)
+    if dt_debut.tzinfo is None:
+        dt_debut = dt_debut.replace(tzinfo=MADA_TZ)
+    if dt_fin.tzinfo is None:
+        dt_fin = dt_fin.replace(tzinfo=MADA_TZ)
+    
+    total_nuit = 0
+    # On va itérer minute par minute
+    current = dt_debut.replace(second=0, microsecond=0)
+    while current < dt_fin:
+        # Prochaine minute
+        next_min = current + timedelta(minutes=1)
+        if next_min > dt_fin:
+            next_min = dt_fin
+        # Vérifier si l'heure actuelle est dans la plage nocturne
+        heure = current.hour
+        if heure >= 22 or heure < 5:
+            # Ajouter la durée de cette minute (ou fraction)
+            duree = (next_min - current).total_seconds()
+            total_nuit += duree
+        current = next_min
+    return total_nuit
+
+# --- NOUVELLE PAGE : STATISTIQUES & ANALYSES (OPÉRATEUR) avec analyse Nuit/Jour ---
 def page_operateur_stats():
     st.title("📊 Statistiques & Analyses")
     
@@ -1919,7 +1985,7 @@ def page_operateur_stats():
         ">
             <span style="color: #8bb8ff; font-weight: 500;">▸ Connecté :</span>
             <span style="color: #d0e4ff;">{st.session_state.user_actif}</span>
-            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now(MADA_TZ).strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -1938,11 +2004,12 @@ def page_operateur_stats():
                 "date_debut": entry.get("date_debut", ""),
                 "date_fin": entry.get("date_fin", ""),
                 "temps_secondes": entry.get("temps_secondes", 0),
-                "temps_formate": entry.get("temps_formate", ""),
+                "temps_formate": entry.get("temps_formate", "00:00:00"),
                 "match": entry.get("match", ""),
                 "wf": entry.get("wf", ""),
                 "ligue": entry.get("ligue", ""),
-                "remarques": entry.get("remarques", "")
+                "remarques": entry.get("remarques", ""),
+                "evenements": entry.get("evenements", [])
             })
     
     df = pd.DataFrame(records)
@@ -1950,33 +2017,55 @@ def page_operateur_stats():
         st.info("Aucune donnée à afficher.")
         return
     
-    # Convertir les dates
-    df["date_debut_dt"] = pd.to_datetime(df["date_debut"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
-    df["date_fin_dt"] = pd.to_datetime(df["date_fin"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
-    df["date"] = df["date_debut_dt"].dt.date
-    df["jour"] = df["date_debut_dt"].dt.date
-    df["mois"] = df["date_debut_dt"].dt.to_period("M")
-    df["semaine"] = df["date_debut_dt"].dt.to_period("W")
+    # Convertir les dates en datetime avec fuseau MADA
+    def parse_date(date_str):
+        if not date_str or date_str == "N/A":
+            return None
+        try:
+            # Essayer de parser avec format "%d/%m/%Y %H:%M:%S"
+            dt = datetime.strptime(date_str, "%d/%m/%Y %H:%M:%S")
+            dt = dt.replace(tzinfo=MADA_TZ)
+            return dt
+        except:
+            return None
     
-    # Filtres de période
+    df["date_debut_dt"] = df["date_debut"].apply(parse_date)
+    df["date_fin_dt"] = df["date_fin"].apply(parse_date)
+    # Ne garder que les lignes avec des dates valides
+    df = df.dropna(subset=["date_debut_dt", "date_fin_dt"])
+    if df.empty:
+        st.warning("Aucune tâche avec des dates valides.")
+        return
+    
+    # Calcul du temps de nuit pour chaque tâche
+    df["temps_nuit_sec"] = df.apply(
+        lambda row: calculer_temps_nuit(row["date_debut_dt"], row["date_fin_dt"]),
+        axis=1
+    )
+    # Temps de jour = total - nuit
+    df["temps_jour_sec"] = df["temps_secondes"] - df["temps_nuit_sec"]
+    df["temps_nuit_formate"] = df["temps_nuit_sec"].apply(format_duration_hms)
+    df["temps_jour_formate"] = df["temps_jour_sec"].apply(format_duration_hms)
+    
+    # Filtrer par date (sidebar)
     st.sidebar.markdown("---")
     st.sidebar.subheader("📅 Filtres")
-    date_min = df["date"].min()
-    date_max = df["date"].max()
+    date_min = df["date_debut_dt"].min().date()
+    date_max = df["date_debut_dt"].max().date()
     col_filtre1, col_filtre2 = st.sidebar.columns(2)
     with col_filtre1:
-        date_debut_filtre = st.date_input("Date début", value=date_min, min_value=date_min, max_value=date_max)
+        date_debut_filtre = st.date_input("Date début", value=date_min, min_value=date_min, max_value=date_max, key="stats_date_debut")
     with col_filtre2:
-        date_fin_filtre = st.date_input("Date fin", value=date_max, min_value=date_min, max_value=date_max)
+        date_fin_filtre = st.date_input("Date fin", value=date_max, min_value=date_min, max_value=date_max, key="stats_date_fin")
     
     # Appliquer les filtres
-    mask = (df["date"] >= date_debut_filtre) & (df["date"] <= date_fin_filtre)
+    mask = (df["date_debut_dt"].dt.date >= date_debut_filtre) & (df["date_debut_dt"].dt.date <= date_fin_filtre)
     df_filtre = df[mask]
     if df_filtre.empty:
         st.warning("Aucune donnée pour la période sélectionnée.")
         return
     
-    # Métriques globales
+    # Métriques globales (HH:MM:SS)
     total_taches = len(df_filtre)
     total_temps_sec = df_filtre["temps_secondes"].sum()
     moyenne_sec = df_filtre["temps_secondes"].mean() if total_taches > 0 else 0
@@ -1984,24 +2073,45 @@ def page_operateur_stats():
     max_sec = df_filtre["temps_secondes"].max() if total_taches > 0 else 0
     min_sec = df_filtre["temps_secondes"].min() if total_taches > 0 else 0
     
-    # Fonction de formatage
-    def sec_to_hms(sec):
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        return f"{h:02d}h{m:02d}m{s:02d}s"
-    
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("📋 Tâches", total_taches)
-    col2.metric("⏱️ Total", sec_to_hms(total_temps_sec))
-    col3.metric("📊 Moyenne", sec_to_hms(moyenne_sec))
-    col4.metric("📈 Médiane", sec_to_hms(mediane_sec))
-    col5.metric("🔺 Max", sec_to_hms(max_sec))
-    col6.metric("🔻 Min", sec_to_hms(min_sec))
+    col2.metric("⏱️ Total", format_duration_hms(total_temps_sec))
+    col3.metric("📊 Moyenne", format_duration_hms(moyenne_sec))
+    col4.metric("📈 Médiane", format_duration_hms(mediane_sec))
+    col5.metric("🔺 Max", format_duration_hms(max_sec))
+    col6.metric("🔻 Min", format_duration_hms(min_sec))
     
     st.markdown("---")
     
-    # Graphiques
+    # --- NOUVELLE SECTION : ANALYSE NUIT / JOUR ---
+    st.subheader("🌙 Analyse Nuit / Jour")
+    
+    total_nuit_sec = df_filtre["temps_nuit_sec"].sum()
+    total_jour_sec = df_filtre["temps_jour_sec"].sum()
+    total_sec = total_nuit_sec + total_jour_sec
+    taux_nuit = (total_nuit_sec / total_sec * 100) if total_sec > 0 else 0
+    
+    col_n1, col_n2, col_n3 = st.columns(3)
+    col_n1.metric("🌙 Total Nuit", format_duration_hms(total_nuit_sec))
+    col_n2.metric("☀️ Total Jour", format_duration_hms(total_jour_sec))
+    col_n3.metric("📊 Taux Nuit", f"{taux_nuit:.1f}%")
+    
+    # Graphique camembert Nuit/Jour
+    if total_sec > 0:
+        fig_nuit = px.pie(
+            names=["Nuit", "Jour"],
+            values=[total_nuit_sec, total_jour_sec],
+            title="Répartition Nuit / Jour",
+            color_discrete_sequence=["#1a4a7a", "#4a8ecf"]
+        )
+        fig_nuit.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff')
+        st.plotly_chart(fig_nuit, use_container_width=True)
+    else:
+        st.info("Aucune donnée pour l'analyse Nuit/Jour.")
+    
+    st.markdown("---")
+    
+    # Graphiques existants
     col_g1, col_g2 = st.columns(2)
     
     with col_g1:
@@ -2017,8 +2127,8 @@ def page_operateur_stats():
     
     with col_g2:
         # Évolution des temps par jour (histogramme)
-        df_jour = df_filtre.groupby("jour")["temps_secondes"].sum().reset_index()
-        df_jour["jour_str"] = df_jour["jour"].astype(str)
+        df_jour = df_filtre.groupby(df_filtre["date_debut_dt"].dt.date)["temps_secondes"].sum().reset_index()
+        df_jour["jour_str"] = df_jour["date_debut_dt"].astype(str)
         fig_bar = px.bar(
             df_jour,
             x="jour_str",
@@ -2041,15 +2151,19 @@ def page_operateur_stats():
         temps_total=("temps_secondes", "sum"),
         temps_moyen=("temps_secondes", "mean"),
         temps_max=("temps_secondes", "max"),
-        temps_min=("temps_secondes", "min")
+        temps_min=("temps_secondes", "min"),
+        nuit_total=("temps_nuit_sec", "sum"),
+        jour_total=("temps_jour_sec", "sum")
     ).reset_index()
-    df_type["temps_total_str"] = df_type["temps_total"].apply(sec_to_hms)
-    df_type["temps_moyen_str"] = df_type["temps_moyen"].apply(sec_to_hms)
-    df_type["temps_max_str"] = df_type["temps_max"].apply(sec_to_hms)
-    df_type["temps_min_str"] = df_type["temps_min"].apply(sec_to_hms)
+    df_type["temps_total_str"] = df_type["temps_total"].apply(format_duration_hms)
+    df_type["temps_moyen_str"] = df_type["temps_moyen"].apply(format_duration_hms)
+    df_type["temps_max_str"] = df_type["temps_max"].apply(format_duration_hms)
+    df_type["temps_min_str"] = df_type["temps_min"].apply(format_duration_hms)
+    df_type["nuit_total_str"] = df_type["nuit_total"].apply(format_duration_hms)
+    df_type["jour_total_str"] = df_type["jour_total"].apply(format_duration_hms)
     
     st.dataframe(
-        df_type[["tache", "nombre", "temps_total_str", "temps_moyen_str", "temps_max_str", "temps_min_str"]],
+        df_type[["tache", "nombre", "temps_total_str", "temps_moyen_str", "temps_max_str", "temps_min_str", "nuit_total_str", "jour_total_str"]],
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -2058,31 +2172,39 @@ def page_operateur_stats():
             "temps_total_str": "Temps total",
             "temps_moyen_str": "Temps moyen",
             "temps_max_str": "Temps max",
-            "temps_min_str": "Temps min"
+            "temps_min_str": "Temps min",
+            "nuit_total_str": "Total Nuit",
+            "jour_total_str": "Total Jour"
         }
     )
     
     # Performance quotidienne
     st.markdown("---")
     st.subheader("📅 Performance quotidienne")
-    df_perf_jour = df_filtre.groupby("jour").agg(
+    df_perf_jour = df_filtre.groupby(df_filtre["date_debut_dt"].dt.date).agg(
         nb_taches=("tache", "count"),
         temps_total=("temps_secondes", "sum"),
-        temps_moyen=("temps_secondes", "mean")
+        temps_moyen=("temps_secondes", "mean"),
+        nuit_total=("temps_nuit_sec", "sum"),
+        jour_total=("temps_jour_sec", "sum")
     ).reset_index()
-    df_perf_jour["jour_str"] = df_perf_jour["jour"].astype(str)
-    df_perf_jour["temps_total_str"] = df_perf_jour["temps_total"].apply(sec_to_hms)
-    df_perf_jour["temps_moyen_str"] = df_perf_jour["temps_moyen"].apply(sec_to_hms)
+    df_perf_jour["jour_str"] = df_perf_jour["date_debut_dt"].astype(str)
+    df_perf_jour["temps_total_str"] = df_perf_jour["temps_total"].apply(format_duration_hms)
+    df_perf_jour["temps_moyen_str"] = df_perf_jour["temps_moyen"].apply(format_duration_hms)
+    df_perf_jour["nuit_total_str"] = df_perf_jour["nuit_total"].apply(format_duration_hms)
+    df_perf_jour["jour_total_str"] = df_perf_jour["jour_total"].apply(format_duration_hms)
     
     st.dataframe(
-        df_perf_jour[["jour_str", "nb_taches", "temps_total_str", "temps_moyen_str"]],
+        df_perf_jour[["jour_str", "nb_taches", "temps_total_str", "temps_moyen_str", "nuit_total_str", "jour_total_str"]],
         use_container_width=True,
         hide_index=True,
         column_config={
             "jour_str": "Date",
             "nb_taches": "Tâches",
             "temps_total_str": "Temps total",
-            "temps_moyen_str": "Temps moyen"
+            "temps_moyen_str": "Temps moyen",
+            "nuit_total_str": "Nuit",
+            "jour_total_str": "Jour"
         }
     )
     
@@ -2116,7 +2238,7 @@ def page_chat():
         ">
             <span style="color: #8bb8ff; font-weight: 500;">▸ Connecté :</span>
             <span style="color: #d0e4ff;">{st.session_state.user_actif}</span>
-            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now(MADA_TZ).strftime('%d/%m/%Y %H:%M')}</span>
             <span style="color: #5a7a9a; margin-left: 20px;">💬 {len(get_chat_messages(limit=1000))} messages</span>
         </div>
     """, unsafe_allow_html=True)
@@ -2149,7 +2271,7 @@ def page_chat():
                     st.markdown(f"**{msg['full_name'] or msg['username']}**")
                 with col_right:
                     # Message texte
-                    st.markdown(f"<div class='chat-message'><span class='sender'>{msg['full_name'] or msg['username']}</span> <span class='timestamp'>{datetime.fromisoformat(msg['timestamp']).strftime('%d/%m/%Y %H:%M')}</span><div class='content'>{msg['text']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='chat-message'><span class='sender'>{msg['full_name'] or msg['username']}</span> <span class='timestamp'>{msg['timestamp']}</span><div class='content'>{msg['text']}</div>", unsafe_allow_html=True)
                     # Pièce jointe (image)
                     if msg.get('attachment'):
                         try:
@@ -2249,7 +2371,7 @@ def page_operateur_shared_tasks():
             backdrop-filter: blur(8px);
         ">
             <span style="color: #8bb8ff; font-weight: 500;">▸ {st.session_state.user_actif}</span>
-            <span style="color: #5a7a9a; margin-left: 20px; font-size: 0.85em;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #5a7a9a; margin-left: 20px; font-size: 0.85em;">{datetime.now(MADA_TZ).strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -2306,7 +2428,7 @@ def page_operateur_shared_tasks():
                                 Match: {task['match_info']} | WF: {task['wf']} | Ligue: {task['ligue']}
                             </div>
                             <div style="font-size: 0.8em; color: #7a9bcb;">Remarques: {task['remarques']}</div>
-                            <div style="font-size: 0.7em; color: #5a7a9a;">Créé le: {task['date_creation'][:16]}</div>
+                            <div style="font-size: 0.7em; color: #5a7a9a;">Créé le: {formater_datetime_iso(task['date_creation'])}</div>
                         </div>
                     """, unsafe_allow_html=True)
                     # Menu déroulant pour assigner à un agent
@@ -2394,10 +2516,17 @@ with st.sidebar:
     if st.session_state.user_actif in users:
         user_data = users[st.session_state.user_actif]
         if user_data.get("last_login"):
-            last_login = datetime.fromisoformat(user_data["last_login"]).strftime("%d/%m/%Y %H:%M")
+            last_login = user_data["last_login"]
+            try:
+                dt = datetime.fromisoformat(last_login)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=MADA_TZ)
+                last_login_str = dt.strftime("%d/%m/%Y %H:%M")
+            except:
+                last_login_str = last_login
             st.markdown(f"""
                 <div style="font-size: 12px; color: #5a7a9a; margin-bottom: 10px;">
-                    🕐 Dernière connexion: {last_login}
+                    🕐 Dernière connexion: {last_login_str}
                 </div>
             """, unsafe_allow_html=True)
     
@@ -2486,8 +2615,10 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
 
-# --- FONCTIONS DE CALCUL ---
+# --- FONCTIONS DE CALCUL (pour les heures de nuit - conservées mais utilisées ailleurs) ---
 def calculer_heures_nuit(dt_e, dt_s, dt_dp=None, dt_fp=None):
+    # Fonction existante, gardée pour compatibilité avec les imports de pointage
+    # Elle utilise la plage 19h-5h, mais on garde la nouvelle fonction pour 22h-5h dans les stats
     total_nuit = 0.0
     courant = dt_e
     while courant < dt_s:
@@ -2509,53 +2640,52 @@ def calculer_heures_nuit(dt_e, dt_s, dt_dp=None, dt_fp=None):
         courant = prochain
     return round(total_nuit, 2)
 
-# --- FORMATAGE ---
+# --- FORMATAGE (fonctions dépréciées remplacées par format_duration_hms) ---
+# Les fonctions formater_en_duree et formater_en_ecart sont conservées pour compatibilité
+# avec certaines parties du code (ex: suivi des heures) mais on les modifie pour utiliser le nouveau format
 def formater_en_duree(val_float):
+    """Convertit un nombre d'heures en HH:MM:SS (via secondes)"""
     try:
         val = float(val_float)
-        if val <= 0:
-            return "00h00"
-        heures = int(val)
-        minutes = int(round((val - heures) * 60))
-        if minutes == 60:
-            heures += 1
-            minutes = 0
-        return f"{heures:02d}h{minutes:02d}"
-    except (ValueError, TypeError):
-        return "00h00"
+        seconds = val * 3600
+        return format_duration_hms(seconds)
+    except:
+        return "00:00:00"
 
 def formater_en_ecart(val_float):
+    """Affiche l'écart en HH:MM:SS avec signe + ou -"""
     try:
         val = float(val_float)
-        signe = "+" if val > 0 else ("-" if val < 0 else "")
-        val_abs = abs(val)
-        heures = int(val_abs)
-        minutes = int(round((val_abs - heures) * 60))
-        if minutes == 60:
-            heures += 1
-            minutes = 0
-        if heures == 0 and minutes == 0:
-            return "00h00"
-        return f"{signe}{heures:02d}h{minutes:02d}"
-    except (ValueError, TypeError):
-        return "00h00"
+        seconds = val * 3600
+        if seconds == 0:
+            return "00:00:00"
+        signe = "+" if seconds > 0 else "-"
+        return signe + format_duration_hms(abs(seconds))
+    except:
+        return "00:00:00"
 
-# --- STYLES DES GRILLES ---
+# --- STYLES DES GRILLES (adaptés aux nouveaux formats) ---
 def appliquer_couleur_jours_cloud(val_str):
+    # val_str est au format HH:MM:SS (ou ancien XXhXX)
     try:
-        if ":" in val_str:
-            parts = val_str.split(":")
-            heures = int(parts[0])
-            minutes = int(parts[1])
-        elif "h" in val_str:
+        # Convertir en secondes
+        if "h" in val_str:
+            # ancien format
             parts = val_str.lower().split('h')
             heures = int(parts[0])
             minutes = int(parts[1]) if len(parts) > 1 and parts[1].strip() else 0
+            total_heures = heures + minutes/60
+        elif ":" in val_str:
+            parts = val_str.split(":")
+            if len(parts) >= 2:
+                heures = int(parts[0])
+                minutes = int(parts[1])
+                secondes = int(parts[2]) if len(parts) > 2 else 0
+                total_heures = heures + minutes/60 + secondes/3600
+            else:
+                total_heures = float(val_str)
         else:
             total_heures = float(val_str)
-            heures, minutes = int(total_heures), int((total_heures - int(total_heures)) * 60)
-            
-        total_heures = heures + (minutes / 60.0)
         
         if total_heures >= 7.5:
             return "background-color: #2E7D32; color: white; font-weight: bold; text-align: center;"
@@ -2567,40 +2697,50 @@ def appliquer_couleur_jours_cloud(val_str):
             return "background-color: #C62828; color: white; font-weight: bold; text-align: center;"
         else:
             return "text-align: center;"
-    except Exception:
+    except:
         return "text-align: center;"
 
 def appliquer_couleur_jours_suivi_brut(val_str):
     try:
-        heures = int(val_str.split('h')[0])
-        minutes = int(val_str.split('h')[1])
-        total_heures = heures + (minutes / 60.0)
+        if "h" in val_str:
+            parts = val_str.lower().split('h')
+            heures = int(parts[0])
+            minutes = int(parts[1]) if len(parts) > 1 and parts[1].strip() else 0
+            total_heures = heures + minutes/60
+        elif ":" in val_str:
+            parts = val_str.split(":")
+            heures = int(parts[0])
+            minutes = int(parts[1])
+            secondes = int(parts[2]) if len(parts) > 2 else 0
+            total_heures = heures + minutes/60 + secondes/3600
+        else:
+            total_heures = float(val_str)
+        
         if total_heures >= 8.0:
             return "background-color: #2E7D32; color: white; font-weight: bold; text-align: center;"
         elif total_heures > 0.0:
             return "background-color: #FBC02D; color: black; font-weight: bold; text-align: center;"
         else:
             return "background-color: #C62828; color: white; text-align: center;"
-    except Exception:
+    except:
         return "text-align: center;"
 
 def appliquer_couleur_totaux_ecart(val_str):
-    try:
-        if val_str.startswith("+"):
-            return "background-color: #2E7D32; color: white; font-weight: bold; text-align: center;"
-        elif val_str.startswith("-"):
-            return "background-color: #C62828; color: white; font-weight: bold; text-align: center;"
-        else:
-            return "background-color: white; color: black; font-weight: bold; text-align: center;"
-    except Exception:
-        return "text-align: center;"
+    # val_str est un écart avec signe
+    if val_str.startswith("+"):
+        return "background-color: #2E7D32; color: white; font-weight: bold; text-align: center;"
+    elif val_str.startswith("-"):
+        return "background-color: #C62828; color: white; font-weight: bold; text-align: center;"
+    else:
+        return "background-color: white; color: black; font-weight: bold; text-align: center;"
 
 def appliquer_style_nuit(val_str):
-    if val_str != "00h00" and "h" in val_str:
+    if val_str != "00:00:00" and val_str != "00h00":
         return "background-color: #0D47A1; color: white; font-weight: bold; text-align: center;"
     return "text-align: center;"
 
 def convertir_temps_en_heures(val_str):
+    # Convertit une chaîne HH:MM:SS ou XXhXX en heures décimales
     if pd.isna(val_str):
         return 0.0
     val_str = str(val_str).strip()
@@ -2725,10 +2865,10 @@ def page_gestion_agents():
         total_taches = len(df_cloud)
         total_heures = df_cloud["duree_num"].sum() if "duree_num" in df_cloud.columns else 0
         col3.metric("Tâches Totales", total_taches)
-        col4.metric("Heures Totales", formater_en_duree(total_heures))
+        col4.metric("Heures Totales", format_duration_hms(total_heures * 3600))
     else:
         col3.metric("Tâches Totales", "0")
-        col4.metric("Heures Totales", "00h00")
+        col4.metric("Heures Totales", "00:00:00")
     
     st.markdown("---")
     
@@ -2766,8 +2906,8 @@ def page_gestion_agents():
                 resume_data.append({
                     "Agent": agent,
                     "Tâches": stats["total_taches"],
-                    "Heures Total": formater_en_duree(stats["total_heures"]),
-                    "Moyenne/H": formater_en_duree(stats["moyenne_heures"]),
+                    "Heures Total": format_duration_hms(stats["total_heures"] * 3600),
+                    "Moyenne/H": format_duration_hms(stats["moyenne_heures"] * 3600),
                     "Performance": f"{perf:.2f} tâches/h",
                     "Niveau": niveau,
                     "Types de Travail": types_str[:50] + "..." if len(types_str) > 50 else types_str,
@@ -2934,7 +3074,7 @@ def page_planning():
         annee_sel = st.selectbox("Année", [2026, 2027], index=0, key="plan_yr")
     with col2:
         mois_options = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
-        mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], index=datetime.now().month - 1, key="plan_mo")
+        mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], index=datetime.now(MADA_TZ).month - 1, key="plan_mo")
 
     cal = calendar.Calendar(firstweekday=0)
     semaines_du_mois = cal.monthdayscalendar(annee_sel, mois_sel)
@@ -3127,7 +3267,7 @@ def page_suivi_heures():
         annee_sel = st.selectbox("Année", [2026, 2027], index=0, key="hrs_yr")
     with col2:
         mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x],
-                                index=datetime.now().month - 1, key="hrs_mo")
+                                index=datetime.now(MADA_TZ).month - 1, key="hrs_mo")
 
     cal = calendar.Calendar(firstweekday=0)
     semaines_du_mois = cal.monthdayscalendar(annee_sel, mois_sel)
@@ -3241,8 +3381,8 @@ def page_suivi_heures():
                     hrs = donnee.get("total", 0.0)
                     hrs_nuit = donnee.get("nuit", 0.0)
                         
-                    row[nom_col] = formater_en_duree(hrs)
-                    row_nuit[nom_col] = formater_en_duree(hrs_nuit)
+                    row[nom_col] = format_duration_hms(hrs * 3600)
+                    row_nuit[nom_col] = format_duration_hms(hrs_nuit * 3600)
                     
                     total_semaine += hrs
                     nuit_semaine += hrs_nuit
@@ -3254,13 +3394,13 @@ def page_suivi_heures():
                     elif noms_jours[i] == "Dimanche":
                         dimanche_semaine += hrs
             
-            row["Total Semaine"] = formater_en_duree(total_semaine)
+            row["Total Semaine"] = format_duration_hms(total_semaine * 3600)
             row["Écart Semaine"] = formater_en_ecart(ecart_semaine)
-            row_nuit["Total Nuit Semaine"] = formater_en_duree(nuit_semaine)
+            row_nuit["Total Nuit Semaine"] = format_duration_hms(nuit_semaine * 3600)
             
-            row_we["Samedi (Semaine)"] = formater_en_duree(samedi_semaine)
-            row_we["Dimanche (Semaine)"] = formater_en_duree(dimanche_semaine)
-            row_we["Total WE Semaine"] = formater_en_duree(samedi_semaine + dimanche_semaine)
+            row_we["Samedi (Semaine)"] = format_duration_hms(samedi_semaine * 3600)
+            row_we["Dimanche (Semaine)"] = format_duration_hms(dimanche_semaine * 3600)
+            row_we["Total WE Semaine"] = format_duration_hms((samedi_semaine + dimanche_semaine) * 3600)
             
             total_mois = 0.0
             nuit_mois = 0.0
@@ -3287,13 +3427,13 @@ def page_suivi_heures():
                 elif dt_obj.weekday() == 6:
                     dimanche_mois += hrs_m
                 
-            row["Total Mois"] = formater_en_duree(total_mois)
+            row["Total Mois"] = format_duration_hms(total_mois * 3600)
             row["Écart Mois"] = formater_en_ecart(ecart_mois)
-            row_nuit["Total Nuit Mois"] = formater_en_duree(nuit_mois)
+            row_nuit["Total Nuit Mois"] = format_duration_hms(nuit_mois * 3600)
             
-            row_we["Samedi (Mois)"] = formater_en_duree(samedi_mois)
-            row_we["Dimanche (Mois)"] = formater_en_duree(dimanche_mois)
-            row_we["Total WE Mois"] = formater_en_duree(samedi_mois + dimanche_mois)
+            row_we["Samedi (Mois)"] = format_duration_hms(samedi_mois * 3600)
+            row_we["Dimanche (Mois)"] = format_duration_hms(dimanche_mois * 3600)
+            row_we["Total WE Mois"] = format_duration_hms((samedi_mois + dimanche_mois) * 3600)
             
             rows_heures.append(row)
             rows_dispatch_nuit.append(row_nuit)
@@ -3376,7 +3516,7 @@ def page_suivi_heures():
             # Clé unique pour éviter les conflits
             agent_manuel = st.selectbox("Agent", [a["nom"] for a in agents_db], key="manuel_agent_select")
         with col_agent_date[1]:
-            date_manuel = st.date_input("Date", value=datetime.now().date(), key="manuel_date")
+            date_manuel = st.date_input("Date", value=datetime.now(MADA_TZ).date(), key="manuel_date")
         
         # Gestion des plages dynamiques
         if "plages_pointage" not in st.session_state:
@@ -3439,7 +3579,7 @@ def page_suivi_heures():
                 # Enregistrer les totaux (addition)
                 db_manager.set_heures(date_str, agent_id, total_heures_jour, total_nuit_jour)
                 executer_sauvegarde_auto("pointage_manuel", st.session_state.user_actif)
-                st.toast(f"✅ Pointage enregistré pour {agent_manuel} le {date_str} (Total: {formater_en_duree(total_heures_jour)})", icon="⏱️")
+                st.toast(f"✅ Pointage enregistré pour {agent_manuel} le {date_str} (Total: {format_duration_hms(total_heures_jour * 3600)})", icon="⏱️")
                 st.rerun()
 
     # ---------- Onglet 3 : Présences ----------
@@ -3447,7 +3587,7 @@ def page_suivi_heures():
         st.markdown("### 📋 Présences par Agent")
         col_date_presence = st.columns([2,1])
         with col_date_presence[0]:
-            date_presence = st.date_input("Choisir une date", value=datetime.now().date(), key="presence_date")
+            date_presence = st.date_input("Choisir une date", value=datetime.now(MADA_TZ).date(), key="presence_date")
         if st.button("Afficher les présences", use_container_width=True):
             date_str = date_presence.strftime("%Y-%m-%d")
             pointages = db_manager.get_pointages_by_date(date_str)
@@ -3462,6 +3602,8 @@ def page_suivi_heures():
                     data = []
                     for evt in events_sorted:
                         dt = datetime.fromisoformat(evt["timestamp"])
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=MADA_TZ)
                         data.append({"Type": evt["type"], "Heure": dt.strftime("%H:%M:%S")})
                     df_pres = pd.DataFrame(data)
                     st.subheader(f"👤 {agent_nom}")
@@ -3475,7 +3617,7 @@ def page_suivi_heures():
         with col_mois:
             annee_pres = st.selectbox("Année", [2026, 2027], index=0, key="pres_annee")
             mois_pres = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], 
-                                     index=datetime.now().month - 1, key="pres_mois")
+                                     index=datetime.now(MADA_TZ).month - 1, key="pres_mois")
         with col_agent:
             agent_pres = st.selectbox("Agent", [a["nom"] for a in agents_db], key="pres_agent")
         
@@ -3503,6 +3645,10 @@ def page_suivi_heures():
             if events_sorted:
                 debut = datetime.fromisoformat(events_sorted[0]["timestamp"])
                 fin = datetime.fromisoformat(events_sorted[-1]["timestamp"])
+                if debut.tzinfo is None:
+                    debut = debut.replace(tzinfo=MADA_TZ)
+                if fin.tzinfo is None:
+                    fin = fin.replace(tzinfo=MADA_TZ)
                 entree = debut.strftime("%H:%M")
                 sortie = fin.strftime("%H:%M")
             
@@ -3522,8 +3668,8 @@ def page_suivi_heures():
                 "HD": entree,
                 "HF": sortie,
                 "Statut": statut if statut else "Non défini",
-                "HT Jour": formater_en_duree(hrs_total),
-                "HT Nuit": formater_en_duree(hrs_nuit)
+                "HT Jour": format_duration_hms(hrs_total * 3600),
+                "HT Nuit": format_duration_hms(hrs_nuit * 3600)
             })
             
         df_presence = pd.DataFrame(jours_mois)
@@ -3531,7 +3677,7 @@ def page_suivi_heures():
         if df_presence.empty:
             st.info("Aucune donnée pour ce mois.")
         else:
-            # Appliquer le style vert/bleu/rouge selon les heures travaillées comme dans l'image
+            # Appliquer le style vert/bleu/rouge selon les heures travaillées
             def style_presence(row):
                 styles = [""] * len(row)
                 try:
@@ -3562,8 +3708,8 @@ def page_suivi_heures():
             st.markdown("---")
             col_m1, col_m2, col_m3 = st.columns(3)
             col_m1.metric("📅 Jours Travaillés", jours_travail)
-            col_m2.metric("⏱️ Total Heures Mois", formater_en_duree(total_heures_mois))
-            col_m3.metric("🌙 Total Heures Nuit", formater_en_duree(total_nuit_mois))
+            col_m2.metric("⏱️ Total Heures Mois", format_duration_hms(total_heures_mois * 3600))
+            col_m3.metric("🌙 Total Heures Nuit", format_duration_hms(total_nuit_mois * 3600))
 
 # --- PAGE 4 : SYNCHRONISATION CLOUD ---
 def page_synchronisation_cloud():
@@ -3750,8 +3896,8 @@ def page_synchronisation_cloud():
 
         st.markdown("### 📊 Indicateurs Clés de Production")
         col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
-        col_kpi1.metric("Temps Moyen par Traitement", formater_en_duree(df_affichage["duree_num"].mean() if not df_affichage.empty else 0))
-        col_kpi2.metric("Volume Total d'Heures", formater_en_duree(df_affichage["duree_num"].sum() if not df_affichage.empty else 0))
+        col_kpi1.metric("Temps Moyen par Traitement", format_duration_hms(df_affichage["duree_num"].mean() * 3600 if not df_affichage.empty else 0))
+        col_kpi2.metric("Volume Total d'Heures", format_duration_hms(df_affichage["duree_num"].sum() * 3600 if not df_affichage.empty else 0))
         col_kpi3.metric("Nombre total de Tâches", f"{len(df_affichage)} Actions")
 
         st.markdown("#### ⏱️ Cumul des Heures de Production")
@@ -3760,7 +3906,7 @@ def page_synchronisation_cloud():
         with tab_jour:
             if not df_affichage.empty:
                 df_jour = df_affichage.groupby("jour")["duree_num"].sum().reset_index()
-                df_jour["Heures_Formatees"] = df_jour["duree_num"].apply(formater_en_duree)
+                df_jour["Heures_Formatees"] = df_jour["duree_num"].apply(lambda x: format_duration_hms(x * 3600))
                 st.dataframe(df_jour[["jour", "Heures_Formatees"]], use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune donnée enregistrée.")
@@ -3768,7 +3914,7 @@ def page_synchronisation_cloud():
         with tab_semaine:
             if not df_affichage.empty:
                 df_sem = df_affichage.groupby("semaine")["duree_num"].sum().reset_index()
-                df_sem["Heures_Formatees"] = df_sem["duree_num"].apply(formater_en_duree)
+                df_sem["Heures_Formatees"] = df_sem["duree_num"].apply(lambda x: format_duration_hms(x * 3600))
                 st.dataframe(df_sem[["semaine", "Heures_Formatees"]], use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune donnée enregistrée.")
@@ -3776,7 +3922,7 @@ def page_synchronisation_cloud():
         with tab_mois:
             if not df_affichage.empty:
                 df_m = df_affichage.groupby("mois")["duree_num"].sum().reset_index()
-                df_m["Heures_Formatees"] = df_m["duree_num"].apply(formater_en_duree)
+                df_m["Heures_Formatees"] = df_m["duree_num"].apply(lambda x: format_duration_hms(x * 3600))
                 st.dataframe(df_m[["mois", "Heures_Formatees"]], use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune donnée enregistrée.")
@@ -3789,8 +3935,8 @@ def page_synchronisation_cloud():
                 Temps_Moyen_Heures=("duree_num", "mean")
             ).reset_index()
             
-            df_cat["Durée Totale"] = df_cat["Duree_Totale_Heures"].apply(formater_en_duree)
-            df_cat["Temps Moyen"] = df_cat["Temps_Moyen_Heures"].apply(formater_en_duree)
+            df_cat["Durée Totale"] = df_cat["Duree_Totale_Heures"].apply(lambda x: format_duration_hms(x * 3600))
+            df_cat["Temps Moyen"] = df_cat["Temps_Moyen_Heures"].apply(lambda x: format_duration_hms(x * 3600))
             
             st.dataframe(
                 df_cat[["type_travail", "Nombre_de_Taches", "Durée Totale", "Temps Moyen"]],
@@ -3802,6 +3948,9 @@ def page_synchronisation_cloud():
         st.markdown("#### 📋 Registre Général & Remarques")
         if not df_affichage.empty:
             df_registre = df_affichage[["date", "source_feuille", "type_travail", "statut", "duree_total", "remarques"]].copy()
+            
+            # Appliquer le style sur la colonne duree_total (format HH:MM:SS)
+            df_registre["duree_total"] = df_registre["duree_total"].apply(lambda x: format_duration_hms(convertir_temps_en_heures(x) * 3600))
             
             style_registre = df_registre.style.map(appliquer_couleur_jours_cloud, subset=["duree_total"])
             
@@ -3829,15 +3978,6 @@ def page_synchronisation_cloud():
                 max_h = df_calcul["duree_num"].max()
                 min_h = df_calcul["duree_num"].min()
                 
-                def formater_en_hms(val_float):
-                    if val_float <= 0: return "00:00:00"
-                    h = int(val_float)
-                    m = int((val_float - h) * 60)
-                    s = int(round((((val_float - h) * 60) - m) * 60))
-                    if s == 60: m += 1; s = 0
-                    if m == 60: h += 1; m = 0
-                    return f"{h:02d}:{m:02d}:{s:02d}"
-
                 st.markdown(f"""
                     <div style="
                         display: flex;
@@ -3859,10 +3999,10 @@ def page_synchronisation_cloud():
                     ">
                         <span>[ {titre_barre} ]</span>
                         <span>Nombre : {nb}</span>
-                        <span>Moyenne : {formater_en_hms(moyenne_h)}</span>
-                        <span>Somme : {formater_en_hms(somme_h)}</span>
-                        <span>Min : {formater_en_hms(min_h)}</span>
-                        <span>Max : {formater_en_hms(max_h)}</span>
+                        <span>Moyenne : {format_duration_hms(moyenne_h * 3600)}</span>
+                        <span>Somme : {format_duration_hms(somme_h * 3600)}</span>
+                        <span>Min : {format_duration_hms(min_h * 3600)}</span>
+                        <span>Max : {format_duration_hms(max_h * 3600)}</span>
                     </div>
                 """, unsafe_allow_html=True)
         else:
