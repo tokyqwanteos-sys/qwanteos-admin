@@ -13,6 +13,186 @@ from datetime import datetime, timedelta, time as datetime_time
 from collections import defaultdict
 import re
 import hashlib
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import base64
+from PIL import Image
+
+import db_manager  # ← Nouvel import
+
+# --- INITIALISATION DE LA BASE DE DONNÉES ---
+db_manager.init_db()
+
+# --- CRÉATION DE LA TABLE shared_tasks SI ELLE N'EXISTE PAS ---
+def init_shared_tasks_table():
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS shared_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tache TEXT NOT NULL,
+            match_info TEXT,
+            wf TEXT,
+            ligue TEXT,
+            remarques TEXT,
+            date_creation TEXT,
+            assigne_a TEXT,
+            statut TEXT DEFAULT 'disponible'
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_shared_tasks_table()
+
+# --- FONCTIONS POUR LES TÂCHES PARTAGÉES ---
+def add_shared_task(tache, match_info="", wf="", ligue="", remarques="", assigne_a=None, statut="disponible"):
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    date_creation = datetime.now().isoformat()
+    c.execute(
+        "INSERT INTO shared_tasks (tache, match_info, wf, ligue, remarques, date_creation, assigne_a, statut) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (tache, match_info, wf, ligue, remarques, date_creation, assigne_a, statut)
+    )
+    conn.commit()
+    conn.close()
+
+def get_all_shared_tasks():
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM shared_tasks ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+    tasks = []
+    for row in rows:
+        tasks.append({
+            "id": row[0],
+            "tache": row[1],
+            "match_info": row[2] or "",
+            "wf": row[3] or "",
+            "ligue": row[4] or "",
+            "remarques": row[5] or "",
+            "date_creation": row[6],
+            "assigne_a": row[7] or None,
+            "statut": row[8]
+        })
+    return tasks
+
+def update_shared_task(task_id, **kwargs):
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    fields = []
+    values = []
+    for key, val in kwargs.items():
+        fields.append(f"{key} = ?")
+        values.append(val)
+    values.append(task_id)
+    if fields:
+        query = f"UPDATE shared_tasks SET {', '.join(fields)} WHERE id = ?"
+        c.execute(query, values)
+    conn.commit()
+    conn.close()
+
+def delete_shared_task(task_id):
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM shared_tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+
+def get_tasks_for_agent(agent_name):
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM shared_tasks WHERE assigne_a = ? AND statut != 'termine'", (agent_name,))
+    rows = c.fetchall()
+    conn.close()
+    tasks = []
+    for row in rows:
+        tasks.append({
+            "id": row[0],
+            "tache": row[1],
+            "match_info": row[2] or "",
+            "wf": row[3] or "",
+            "ligue": row[4] or "",
+            "remarques": row[5] or "",
+            "date_creation": row[6],
+            "assigne_a": row[7] or None,
+            "statut": row[8]
+        })
+    return tasks
+
+# --- MIGRATION DES DONNÉES EXISTANTES (une seule fois) ---
+def migrer_donnees():
+    """Importe les données depuis les fichiers JSON vers SQLite."""
+    if not os.path.exists("sauvegardes/sauvegarde_last.json"):
+        return
+    # Vérifier si la table agents est vide
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM agents")
+    if c.fetchone()[0] > 0:
+        conn.close()
+        return  # déjà migré
+    conn.close()
+    
+    with open("sauvegardes/sauvegarde_last.json", "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    # Agents
+    for agent in data.get("agents", []):
+        # Vérifier s'il existe déjà
+        conn = db_manager.get_db()
+        c = conn.cursor()
+        c.execute("SELECT id FROM agents WHERE nom = ?", (agent["Nom"],))
+        if not c.fetchone():
+            db_manager.add_agent(agent["Nom"], agent["Poste"])
+        conn.close()
+    
+    # Récupérer les IDs des agents
+    agents_db = db_manager.get_all_agents()
+    nom_to_id = {a["nom"]: a["id"] for a in agents_db}
+    
+    # Planning
+    for date, plan in data.get("planning", {}).items():
+        for nom, statut in plan.items():
+            agent_id = nom_to_id.get(nom)
+            if agent_id:
+                db_manager.set_planning(date, agent_id, statut)
+    
+    # Heures
+    for date, heures_dict in data.get("heures", {}).items():
+        for nom, heures in heures_dict.items():
+            agent_id = nom_to_id.get(nom)
+            if agent_id:
+                if isinstance(heures, dict):
+                    total = heures.get("total", 0)
+                    nuit = heures.get("nuit", 0)
+                else:
+                    total = float(heures)
+                    nuit = 0
+                db_manager.set_heures(date, agent_id, total, nuit)
+    
+    # Cloud data
+    for row in data.get("donnees_cloud_centralisees", []):
+        db_manager.add_cloud_data(row)
+    
+    # Tâches (on les ignore pour la migration, elles seront re-créées)
+    # On peut aussi les migrer mais ce n'est pas critique.
+    print("Migration terminée.")
+
+# Exécuter la migration
+migrer_donnees()
+
+# --- NOUVELLE FONCTION DE FORMATAGE DES DATES ISO ---
+def formater_datetime_iso(iso_str):
+    """Convertit une chaîne ISO (2026-07-28T10:47:02.749190) en 28/07/2026 10:47:02"""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%d/%m/%Y %H:%M:%S")
+    except:
+        return iso_str
 
 # --- GESTION DES COMPTES UTILISATEURS ---
 def hash_password(password):
@@ -32,7 +212,7 @@ def validate_password(password):
     return True, "Mot de passe valide"
 
 def load_users():
-    """Charge les utilisateurs depuis le fichier"""
+    """Charge les utilisateurs depuis le fichier (pour compatibilité)"""
     users_file = "sauvegardes/users.json"
     if os.path.exists(users_file):
         try:
@@ -43,7 +223,7 @@ def load_users():
     return {}
 
 def save_users(users):
-    """Sauvegarde les utilisateurs dans le fichier"""
+    """Sauvegarde les utilisateurs dans le fichier (pour compatibilité)"""
     try:
         if not os.path.exists("sauvegardes"):
             os.makedirs("sauvegardes")
@@ -167,6 +347,116 @@ def get_user_role(username):
 def check_inactivity():
     # Fonction désactivée - plus de timeout
     pass
+
+# --- FONCTIONS POUR L'EXPORT GOOGLE SHEETS (VERSION INCRÉMENTIELLE) ---
+def get_google_sheet_client():
+    """Initialise le client Google Sheets via compte de service."""
+    try:
+        creds_dict = {
+            "type": st.secrets["gcp"]["type"],
+            "project_id": st.secrets["gcp"]["project_id"],
+            "private_key_id": st.secrets["gcp"]["private_key_id"],
+            "private_key": st.secrets["gcp"]["private_key"],
+            "client_email": st.secrets["gcp"]["client_email"],
+            "client_id": st.secrets["gcp"]["client_id"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": st.secrets["gcp"]["client_x509_cert_url"]
+        }
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"Erreur d'initialisation Google Sheets : {str(e)}")
+        return None
+
+def exporter_vers_google_sheets(utilisateur, df_export, spreadsheet_id):
+    """
+    Export incrémentiel : ajoute uniquement les lignes qui ne sont pas déjà présentes.
+    Utilise la combinaison START, TACHES, DATE comme clé unique.
+    """
+    try:
+        client = get_google_sheet_client()
+        if client is None:
+            return False, "Impossible d'initialiser le client Google Sheets."
+        
+        sheet = client.open_by_key(spreadsheet_id)
+        
+        # Vérifier si la feuille existe déjà
+        try:
+            worksheet = sheet.worksheet(utilisateur)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = sheet.add_worksheet(title=utilisateur, rows="100", cols="20")
+            # Nouvelle feuille : on écrit l'en-tête et toutes les données
+            if not df_export.empty:
+                headers = df_export.columns.tolist()
+                worksheet.append_row(headers)
+                for _, row in df_export.iterrows():
+                    worksheet.append_row(row.tolist())
+            return True, f"✅ Export initial vers la feuille '{utilisateur}' (créée)"
+        
+        # Feuille existante : lire les données actuelles
+        existing_records = worksheet.get_all_values()
+        if not existing_records:
+            # Feuille vide : on écrit l'en-tête et toutes les lignes
+            if not df_export.empty:
+                headers = df_export.columns.tolist()
+                worksheet.append_row(headers)
+                for _, row in df_export.iterrows():
+                    worksheet.append_row(row.tolist())
+            return True, f"✅ Export réussi vers la feuille '{utilisateur}' (feuille vide)"
+        
+        # Extraire les en-têtes (première ligne)
+        existing_headers = existing_records[0]
+        # Les lignes de données (à partir de la deuxième ligne)
+        existing_rows = existing_records[1:]
+        
+        # Construire un ensemble de clés uniques à partir des données existantes
+        # On utilise les colonnes START, TACHES, DATE (ou une combinaison)
+        # Pour la flexibilité, on utilise la colonne DATE, TACHES, START (ou MATCH / WF)
+        # On va utiliser la clé composée de (START, TACHES, DATE) car c'est probablement unique
+        # Note: les colonnes peuvent être dans un ordre différent, on les identifie par leur nom
+        # On va créer un dictionnaire colonne -> index à partir des en-têtes
+        col_index = {col: idx for idx, col in enumerate(existing_headers)}
+        
+        # Définir les colonnes clés : START, TACHES, DATE
+        key_cols = ["START", "TACHES", "DATE"]
+        # Vérifier si ces colonnes existent dans les en-têtes
+        for k in key_cols:
+            if k not in col_index:
+                # Si une colonne clé manque, on ne peut pas dédupliquer proprement
+                # On efface tout et on réécrit (comportement ancien)
+                worksheet.clear()
+                if not df_export.empty:
+                    headers = df_export.columns.tolist()
+                    worksheet.append_row(headers)
+                    for _, row in df_export.iterrows():
+                        worksheet.append_row(row.tolist())
+                return True, f"✅ Export complet (déduplication impossible, réécriture) vers '{utilisateur}'"
+        
+        # Ensemble des clés existantes
+        existing_keys = set()
+        for row in existing_rows:
+            # S'assurer que la ligne a assez de colonnes
+            if len(row) <= max(col_index.values()):
+                continue
+            key = tuple(row[col_index[k]] for k in key_cols)
+            existing_keys.add(key)
+        
+        # Parcourir les nouvelles lignes et ajouter celles qui n'existent pas
+        added_count = 0
+        for _, new_row in df_export.iterrows():
+            key = tuple(str(new_row.get(k, "")) for k in key_cols)
+            if key not in existing_keys:
+                worksheet.append_row(new_row.tolist())
+                added_count += 1
+                # Ajouter la clé pour éviter les doublons dans le même lot
+                existing_keys.add(key)
+        
+        return True, f"✅ Export incrémentiel réussi : {added_count} nouvelle(s) ligne(s) ajoutée(s) dans '{utilisateur}'"
+    except Exception as e:
+        return False, f"❌ Erreur : {str(e)}"
 
 # --- CONFIGURATION DE L'APPLICATION ---
 st.set_page_config(page_title="Qwanteos-Setup Admin", layout="wide", page_icon="💼")
@@ -512,6 +802,81 @@ st.markdown("""
     .timer-running {
         animation: timerPulse 1s ease-in-out infinite;
     }
+
+    /* --- STYLES POUR LE CHAT AMÉLIORÉ --- */
+    .chat-message {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        padding: 12px 16px;
+        margin-bottom: 10px;
+        border-left: 4px solid #4CAF50;
+        animation: fadeSlideUp 0.4s ease-out;
+    }
+    .chat-message .sender {
+        font-weight: 600;
+        color: #4CAF50;
+    }
+    .chat-message .timestamp {
+        font-size: 11px;
+        color: #94a3b8;
+        float: right;
+    }
+    .chat-message .content {
+        margin-top: 5px;
+        color: #e2e8f0;
+    }
+    .chat-message .attachment {
+        margin-top: 8px;
+        max-width: 100%;
+        border-radius: 8px;
+    }
+    .emoji-btn {
+        font-size: 24px;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        transition: transform 0.2s;
+        padding: 4px 8px;
+    }
+    .emoji-btn:hover {
+        transform: scale(1.3);
+    }
+    .floating-chat {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        z-index: 1000;
+        background: linear-gradient(135deg, #2E7D32, #1B5E20);
+        color: white;
+        border-radius: 50%;
+        width: 70px;
+        height: 70px;
+        text-align: center;
+        box-shadow: 0 6px 20px rgba(46, 125, 50, 0.5);
+        cursor: pointer;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 36px;
+        transition: transform 0.3s, box-shadow 0.3s;
+        border: 2px solid #4CAF50;
+        text-decoration: none;
+    }
+    .floating-chat:hover {
+        transform: scale(1.1);
+        box-shadow: 0 8px 30px rgba(46, 125, 50, 0.8);
+    }
+    .floating-chat .badge {
+        position: absolute;
+        top: -5px;
+        right: -5px;
+        background: #C62828;
+        color: white;
+        border-radius: 50%;
+        padding: 2px 8px;
+        font-size: 14px;
+        font-weight: bold;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -648,6 +1013,65 @@ if "data_loaded" not in st.session_state:
 if "user_changed" not in st.session_state:
     st.session_state.user_changed = False
 
+# --- Variables pour le chat (message en cours) ---
+if "chat_message_text" not in st.session_state:
+    st.session_state.chat_message_text = ""
+
+# --- Fonctions pour le chat (extension DB) ---
+def send_chat_message(username, full_name, message, attachment_base64=None):
+    """Envoie un message avec pièce jointe éventuelle (stockée en JSON)."""
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    # Créer le JSON
+    data = {"text": message}
+    if attachment_base64:
+        data["attachment"] = attachment_base64
+    data_str = json.dumps(data, ensure_ascii=False)
+    c.execute(
+        "INSERT INTO messages (username, full_name, message, timestamp) VALUES (?, ?, ?, ?)",
+        (username, full_name, data_str, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+def get_chat_messages(limit=50):
+    """Récupère les messages et parse le JSON."""
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    c.execute(
+        "SELECT username, full_name, message, timestamp FROM messages ORDER BY timestamp DESC LIMIT ?",
+        (limit,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    messages = []
+    for row in rows:
+        username, full_name, msg_json, ts = row
+        try:
+            data = json.loads(msg_json)
+            text = data.get("text", "")
+            attachment = data.get("attachment", None)
+        except:
+            text = msg_json
+            attachment = None
+        messages.append({
+            "username": username,
+            "full_name": full_name,
+            "text": text,
+            "attachment": attachment,
+            "timestamp": ts
+        })
+    return messages
+
+def clear_all_messages():
+    """Supprime tous les messages."""
+    conn = db_manager.get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM messages")
+    conn.commit()
+    conn.close()
+
+# --- AGENTS PAR DÉFAUT ---
 AGENTS_PAR_DEFAUT = [
     {"Nom": "Jean Doe", "Poste": "Setup Operator"},
     {"Nom": "Alice Smith", "Poste": "Team Leader"},
@@ -678,8 +1102,6 @@ if "show_completed_tasks" not in st.session_state:
     st.session_state.show_completed_tasks = True
 
 # --- CHARGEMENT AUTOMATIQUE DES DONNÉES AU DÉMARRAGE ---
-# On charge les données même si l'utilisateur n'est pas encore connecté
-# Cela permet de les garder en mémoire pour quand il se reconnectera
 if not st.session_state.get("data_loaded", False):
     try:
         fichier_last = "sauvegardes/sauvegarde_last.json"
@@ -826,221 +1248,215 @@ if not st.session_state.authentifie:
 
 # --- PAGE POUR OPÉRATEUR (DASHBOARD AVEC CHRONOMÈTRE PROFESSIONNEL) ---
 def page_operateur_dashboard():
-    st.title("⏱️ Dashboard Opérateur - Suivi des Tâches")
+    # Titre plus discret
+    st.title("⏱️ Suivi des Tâches")
     
-    # Informations utilisateur
+    # En-tête utilisateur simplifié
     st.markdown(f"""
         <div style="
-            background: rgba(255, 255, 255, 0.05);
-            padding: 15px 20px;
-            border-radius: 12px;
-            border-left: 4px solid #4CAF50;
-            margin-bottom: 20px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 10px 18px;
+            border-radius: 10px;
+            border-left: 3px solid #4CAF50;
+            margin-bottom: 18px;
         ">
-            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
-            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
-            <span style="color: #94a3b8; margin-left: 20px;">🔵 Rôle : Opérateur</span>
-            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #4CAF50; font-weight: 500;">👤 {st.session_state.user_actif}</span>
+            <span style="color: #94a3b8; margin-left: 20px; font-size: 0.9em;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
+
+    # --- AFFICHAGE DES TÂCHES ASSIGNÉES À L'AGENT (depuis shared_tasks) ---
+    with st.expander("📋 Mes tâches assignées", expanded=False):
+        agent_name = st.session_state.user_actif
+        mes_taches = get_tasks_for_agent(agent_name)
+        if mes_taches:
+            df_mes_taches = pd.DataFrame(mes_taches)
+            df_mes_taches = df_mes_taches[["tache", "match_info", "wf", "ligue", "remarques", "date_creation"]]
+            df_mes_taches.columns = ["Tâche", "Match", "WF", "Ligue", "Remarques", "Date création"]
+            st.dataframe(df_mes_taches, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucune tâche assignée pour le moment.")
     
     # Liste des tâches disponibles
     TACHES_DISPONIBLES = [
-        "INTEGRATION",
-        "OTHER CAM",
-        "PREMIUM",
-        "CORRECTION",
-        "SUBSTITUTIONS",
-        "FEP",
-        "MATCH SETUP",
-        "ATTENTE VIDEOS",
-        "CHECK",
-        "PREPARATION",
-        "FICHIER",
-        "SCOUTING"
+        "INTEGRATION", "OTHER CAM", "PREMIUM", "CORRECTION",
+        "SUBSTITUTIONS", "FEP", "MATCH SETUP", "ATTENTE VIDEOS",
+        "CHECK", "PREPARATION", "FICHIER", "SCOUTING"
     ]
     
-    # --- SECTION NOUVELLE TÂCHE ---
-    st.markdown("### 🚀 Démarrer une nouvelle tâche")
+    # --- SECTION NOUVELLE TÂCHE (plus compacte) ---
+    st.markdown("### 🚀 Nouvelle tâche")
+    with st.container():
+        col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
+        with col1:
+            tache_selectionnee = st.selectbox(
+                "Type", options=TACHES_DISPONIBLES, key="new_task_select"
+            )
+        with col2:
+            match_info = st.text_input("Match", placeholder="vs", key="match_new")
+        with col3:
+            wf_info = st.text_input("WF", placeholder="Workflow", key="wf_new")
+        with col4:
+            ligue_info = st.text_input("Ligue", placeholder="Ligue", key="ligue_new")
+        with col5:
+            remarques_info = st.text_area("Notes", placeholder="Remarques", key="remarques_new", height=60)
+        
+        col_btn1, col_btn2 = st.columns([1, 5])
+        with col_btn1:
+            if st.button("▶️ Démarrer", type="primary", use_container_width=True):
+                agents_db = db_manager.get_all_agents()
+                agent_id = None
+                for ag in agents_db:
+                    if ag["nom"].lower() == st.session_state.user_actif.lower():
+                        agent_id = ag["id"]
+                        break
+                if agent_id is None:
+                    st.error("❌ Compte non lié à un agent. Contactez l'admin.")
+                    st.stop()
+                
+                task_id = st.session_state.task_id_counter + 1
+                st.session_state.task_id_counter = task_id
+                
+                evenements = [{"type": "START", "time": datetime.now().isoformat()}]
+                date_debut = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                
+                db_id = db_manager.add_task(
+                    agent_id=agent_id,
+                    tache=tache_selectionnee,
+                    match_info=match_info if match_info else "",
+                    wf=wf_info if wf_info else "",
+                    ligue=ligue_info if ligue_info else "",
+                    remarques=remarques_info if remarques_info else "",
+                    statut="en_cours",
+                    date_debut=datetime.now().isoformat(),
+                    evenements=evenements
+                )
+                
+                new_task = {
+                    "id": task_id,
+                    "db_id": db_id,
+                    "tache": tache_selectionnee,
+                    "match": match_info or "",
+                    "wf": wf_info or "",
+                    "ligue": ligue_info or "",
+                    "remarques": remarques_info or "",
+                    "statut": "en_cours",
+                    "start_time": datetime.now().isoformat(),
+                    "elapsed_seconds": 0,
+                    "last_start": time.time(),
+                    "evenements": evenements,
+                    "date_debut": date_debut,
+                    "temps_total_secondes": 0,
+                    "temps_formate": "00h00m00s"
+                }
+                st.session_state.taches_en_cours.append(new_task)
+                executer_sauvegarde_auto("task_start", st.session_state.user_actif)
+                st.toast(f"✅ Tâche {tache_selectionnee} démarrée", icon="▶️")
+                st.rerun()
     
-    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
-    
-    with col1:
-        tache_selectionnee = st.selectbox(
-            "Type de tâche",
-            options=TACHES_DISPONIBLES,
-            key="new_task_select"
-        )
-    
-    with col2:
-        match_info = st.text_input("MATCH", placeholder="vs", key="match_new")
-    
-    with col3:
-        wf_info = st.text_input("WF", placeholder="Workflow", key="wf_new")
-    
-    with col4:
-        ligue_info = st.text_input("LIGUE", placeholder="Ligue", key="ligue_new")
-    
-    with col5:
-        remarques_info = st.text_area("REMARQUES", placeholder="Notes", key="remarques_new", height=68)
-    
-    # Bouton pour démarrer
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 3])
-    with col_btn1:
-        if st.button("▶️ START", type="primary", use_container_width=True):
-            # Créer une nouvelle tâche
-            task_id = st.session_state.task_id_counter + 1
-            st.session_state.task_id_counter = task_id
-            
-            new_task = {
-                "id": task_id,
-                "tache": tache_selectionnee,
-                "match": match_info if match_info else "",
-                "wf": wf_info if wf_info else "",
-                "ligue": ligue_info if ligue_info else "",
-                "remarques": remarques_info if remarques_info else "",
-                "statut": "en_cours",  # en_cours, pause, termine
-                "start_time": datetime.now().isoformat(),
-                "elapsed_seconds": 0,
-                "last_start": time.time(),
-                "pauses": [],
-                "date_debut": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                "temps_total_secondes": 0,
-                "temps_formate": "00h00m00s"
-            }
-            
-            st.session_state.taches_en_cours.append(new_task)
-            executer_sauvegarde_auto("task_start", st.session_state.user_actif)
-            st.toast(f"✅ Tâche {tache_selectionnee} démarrée !", icon="▶️")
-            st.rerun()
-    
-    with col_btn2:
-        if st.button("🔄 Rafraîchir", use_container_width=True):
-            st.rerun()
-    
-    # --- TÂCHES EN COURS ---
     st.markdown("---")
-    st.markdown("### 📋 Tâches en cours")
     
+    # --- TÂCHES EN COURS (affichage épuré) ---
+    st.markdown("### 📋 Tâches en cours")
     if st.session_state.taches_en_cours:
-        # Filtrer les tâches non terminées
         taches_actives = [t for t in st.session_state.taches_en_cours if t["statut"] != "termine"]
         taches_terminees = [t for t in st.session_state.taches_en_cours if t["statut"] == "termine"]
         
-        # Métriques rapides
+        # Métriques simplifiées
         col_met1, col_met2, col_met3 = st.columns(3)
         with col_met1:
-            st.metric("🟢 En cours", len([t for t in taches_actives if t["statut"] == "en_cours"]))
+            st.metric("🟢 Actives", len([t for t in taches_actives if t["statut"] == "en_cours"]))
         with col_met2:
-            st.metric("⏸️ En pause", len([t for t in taches_actives if t["statut"] == "pause"]))
+            st.metric("⏸️ Pause", len([t for t in taches_actives if t["statut"] == "pause"]))
         with col_met3:
             st.metric("✅ Terminées", len(taches_terminees))
         
-        # Afficher les tâches actives
         if taches_actives:
-            st.markdown("#### ⏳ Tâches actives")
-            
-            # Créer un conteneur pour les tâches
+            st.markdown("#### ⏳ Actives")
             for task in taches_actives:
-                # Calculer le temps écoulé
                 if task["statut"] == "en_cours":
                     elapsed = task["elapsed_seconds"] + (time.time() - task["last_start"])
                 else:
                     elapsed = task["elapsed_seconds"]
                 
-                # Formater le temps
                 heures = int(elapsed // 3600)
                 minutes = int((elapsed % 3600) // 60)
                 secondes = int(elapsed % 60)
                 
-                # Déterminer le statut
                 if task["statut"] == "en_cours":
                     status_class = "running"
                     status_text = "🟢 En cours"
                     border_color = "#4CAF50"
-                    timer_class = "timer-running"
                 else:
                     status_class = "paused"
                     status_text = "⏸️ En pause"
                     border_color = "#FFA726"
-                    timer_class = "paused"
                 
-                # Afficher la carte de la tâche
+                # Affichage plus compact
                 with st.container():
-                    col_task_info, col_task_timer, col_task_actions = st.columns([3, 2, 3])
-                    
-                    with col_task_info:
+                    cols = st.columns([2, 2, 3])
+                    with cols[0]:
                         st.markdown(f"""
-                            <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 10px; border-left: 4px solid {border_color};">
-                                <div style="font-weight: 600; color: #e2e8f0;">{task['tache']}</div>
-                                <div style="font-size: 12px; color: #94a3b8;">
-                                    🏷️ {task['match'] if task['match'] else 'N/A'} | 
-                                    📋 {task['wf'] if task['wf'] else 'N/A'} | 
-                                    🏆 {task['ligue'] if task['ligue'] else 'N/A'}
+                            <div style="border-left: 3px solid {border_color}; padding-left: 10px;">
+                                <div style="font-weight: 500;">{task['tache']}</div>
+                                <div style="font-size: 0.8em; color: #94a3b8;">
+                                    {task['match']} | {task['wf']} | {task['ligue']}
                                 </div>
-                                <div style="font-size: 11px; color: #64748b; margin-top: 4px;">
-                                    🕐 Début: {task['date_debut']}
-                                </div>
-                                <div style="margin-top: 4px;">
-                                    <span class="task-status {status_class}">{status_text}</span>
-                                </div>
+                                <span class="task-status {status_class}">{status_text}</span>
                             </div>
                         """, unsafe_allow_html=True)
-                    
-                    with col_task_timer:
+                    with cols[1]:
                         st.markdown(f"""
-                            <div style="text-align: center; padding: 10px;">
-                                <div class="task-timer {timer_class}" id="timer_{task['id']}">
-                                    {heures:02d}:{minutes:02d}:{secondes:02d}
-                                </div>
+                            <div style="text-align: center; font-size: 1.3em; font-weight: bold; font-family: monospace; color: {border_color};">
+                                {heures:02d}:{minutes:02d}:{secondes:02d}
                             </div>
                         """, unsafe_allow_html=True)
-                    
-                    with col_task_actions:
-                        # Boutons d'action
+                    with cols[2]:
                         col_btn_pause, col_btn_resume, col_btn_stop = st.columns(3)
-                        
                         with col_btn_pause:
                             if task["statut"] == "en_cours":
-                                if st.button("⏸️ Pause", key=f"pause_{task['id']}", use_container_width=True):
-                                    # Mettre en pause
+                                if st.button("⏸️", key=f"pause_{task['id']}", help="Pause"):
                                     task["statut"] = "pause"
                                     task["elapsed_seconds"] += time.time() - task["last_start"]
+                                    task["evenements"].append({"type": "PAUSE", "time": datetime.now().isoformat()})
+                                    db_manager.update_task(task["db_id"], statut="pause", evenements=task["evenements"])
                                     executer_sauvegarde_auto("task_pause", st.session_state.user_actif)
-                                    st.toast(f"⏸️ Tâche {task['tache']} en pause", icon="⏸️")
+                                    st.toast(f"⏸️ {task['tache']} en pause", icon="⏸️")
                                     st.rerun()
-                        
                         with col_btn_resume:
                             if task["statut"] == "pause":
-                                if st.button("▶️ Reprendre", key=f"resume_{task['id']}", use_container_width=True):
-                                    # Reprendre
+                                if st.button("▶️", key=f"resume_{task['id']}", help="Reprendre"):
                                     task["statut"] = "en_cours"
                                     task["last_start"] = time.time()
+                                    task["evenements"].append({"type": "REPRISE", "time": datetime.now().isoformat()})
+                                    db_manager.update_task(task["db_id"], statut="en_cours", evenements=task["evenements"])
                                     executer_sauvegarde_auto("task_resume", st.session_state.user_actif)
-                                    st.toast(f"▶️ Tâche {task['tache']} reprise", icon="▶️")
+                                    st.toast(f"▶️ {task['tache']} reprise", icon="▶️")
                                     st.rerun()
-                        
                         with col_btn_stop:
-                            if st.button("⏹️ Terminer", key=f"stop_{task['id']}", use_container_width=True, type="secondary"):
-                                # Terminer la tâche
+                            if st.button("⏹️", key=f"stop_{task['id']}", help="Terminer"):
                                 if task["statut"] == "en_cours":
                                     task["elapsed_seconds"] += time.time() - task["last_start"]
-                                
-                                # Sauvegarder dans l'historique
+                                task["evenements"].append({"type": "FIN", "time": datetime.now().isoformat()})
                                 task["statut"] = "termine"
                                 task["date_fin"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                                 task["temps_total_secondes"] = task["elapsed_seconds"]
-                                
-                                # Formater le temps total
                                 heures_fin = int(task["elapsed_seconds"] // 3600)
                                 minutes_fin = int((task["elapsed_seconds"] % 3600) // 60)
                                 secondes_fin = int(task["elapsed_seconds"] % 60)
                                 task["temps_formate"] = f"{heures_fin:02d}h{minutes_fin:02d}m{secondes_fin:02d}s"
                                 
-                                # Ajouter à l'historique
+                                db_manager.update_task(
+                                    task["db_id"],
+                                    statut="termine",
+                                    date_fin=datetime.now().isoformat(),
+                                    temps_total_secondes=task["elapsed_seconds"],
+                                    temps_formate=task["temps_formate"],
+                                    evenements=task["evenements"]
+                                )
+                                
                                 if task["tache"] not in st.session_state.taches_operateur:
                                     st.session_state.taches_operateur[task["tache"]] = []
-                                
                                 st.session_state.taches_operateur[task["tache"]].append({
                                     "date_debut": task["date_debut"],
                                     "date_fin": task["date_fin"],
@@ -1051,158 +1467,193 @@ def page_operateur_dashboard():
                                     "wf": task["wf"],
                                     "ligue": task["ligue"],
                                     "remarques": task["remarques"],
-                                    "statut": "Terminé"
+                                    "statut": "Terminé",
+                                    "evenements": task["evenements"]
                                 })
-                                
+                                st.session_state.taches_en_cours = [t for t in st.session_state.taches_en_cours if t["id"] != task["id"]]
                                 executer_sauvegarde_auto("task_complete", st.session_state.user_actif)
-                                st.toast(f"✅ Tâche {task['tache']} terminée ! Temps : {task['temps_formate']}", icon="✅")
+                                st.toast(f"✅ {task['tache']} terminée ({task['temps_formate']})", icon="✅")
                                 st.rerun()
-                    
                     st.markdown("---")
         else:
-            st.info("📋 Aucune tâche active pour le moment.")
+            st.info("Aucune tâche active.")
         
-        # --- AFFICHER LES TÂCHES TERMINÉES DE LA SESSION AVEC OPTION MASQUER ---
+        # --- TÂCHES TERMINÉES (dans un expander) ---
         if taches_terminees:
-            st.markdown("#### ✅ Tâches terminées dans cette session")
-            
-            # Option pour masquer/afficher
-            col_toggle, _ = st.columns([1, 3])
-            with col_toggle:
-                show_tasks = st.checkbox("📂 Afficher les tâches terminées", value=st.session_state.show_completed_tasks)
-                st.session_state.show_completed_tasks = show_tasks
-            
-            if st.session_state.show_completed_tasks:
-                for task in taches_terminees:
-                    with st.expander(f"✅ {task['tache']} - {task.get('temps_formate', 'N/A')}"):
-                        col_det1, col_det2 = st.columns(2)
-                        with col_det1:
-                            st.write(f"**MATCH:** {task.get('match', 'N/A')}")
-                            st.write(f"**WF:** {task.get('wf', 'N/A')}")
-                            st.write(f"**LIGUE:** {task.get('ligue', 'N/A')}")
-                        with col_det2:
-                            st.write(f"**Début:** {task.get('date_debut', 'N/A')}")
-                            st.write(f"**Fin:** {task.get('date_fin', 'N/A')}")
-                            st.write(f"**Temps total:** {task.get('temps_formate', 'N/A')}")
-                        if task.get('remarques'):
-                            st.write(f"**Remarques:** {task['remarques']}")
-            else:
-                st.caption("👁️ Tâches terminées masquées (cochez la case ci-dessus pour les afficher)")
+            with st.expander("✅ Tâches terminées cette session", expanded=False):
+                col_toggle, _ = st.columns([1, 3])
+                with col_toggle:
+                    show_tasks = st.checkbox("Afficher les détails", value=st.session_state.show_completed_tasks)
+                    st.session_state.show_completed_tasks = show_tasks
+                if st.session_state.show_completed_tasks:
+                    for task in taches_terminees:
+                        with st.expander(f"{task['tache']} - {task.get('temps_formate', 'N/A')}"):
+                            col_det1, col_det2 = st.columns(2)
+                            with col_det1:
+                                st.write(f"**Match:** {task.get('match', 'N/A')}")
+                                st.write(f"**WF:** {task.get('wf', 'N/A')}")
+                                st.write(f"**Ligue:** {task.get('ligue', 'N/A')}")
+                            with col_det2:
+                                st.write(f"**Début:** {task.get('date_debut', 'N/A')}")
+                                st.write(f"**Fin:** {task.get('date_fin', 'N/A')}")
+                                st.write(f"**Temps:** {task.get('temps_formate', 'N/A')}")
+                            if task.get('remarques'):
+                                st.write(f"**Remarques:** {task['remarques']}")
+                else:
+                    st.caption("Détails masqués")
     else:
-        st.info("📋 Aucune tâche en cours. Commencez une nouvelle tâche ci-dessus.")
+        st.info("Aucune tâche en cours. Démarrer une nouvelle tâche ci-dessus.")
     
-    # --- HISTORIQUE COMPLET ---
-    st.markdown("---")
-    st.markdown("### 📊 Historique complet des tâches")
+    # --- HISTORIQUE COMPLET (dans un expander) ---
+    with st.expander("📊 Historique complet des tâches", expanded=False):
+        historique_data = []
+        for tache, entries in st.session_state.taches_operateur.items():
+            for entry in entries:
+                historique_data.append({
+                    "Date Début": entry.get("date_debut", "N/A"),
+                    "Date Fin": entry.get("date_fin", "N/A"),
+                    "Tâche": tache,
+                    "Temps": entry.get("temps_formate", "N/A"),
+                    "Temps (sec)": entry.get("temps_secondes", 0),
+                    "MATCH": entry.get("match", "N/A"),
+                    "WF": entry.get("wf", "N/A"),
+                    "LIGUE": entry.get("ligue", "N/A"),
+                    "REMARQUES": entry.get("remarques", "N/A"),
+                    "Statut": entry.get("statut", "Terminé")
+                })
+        
+        if historique_data:
+            df_historique = pd.DataFrame(historique_data)
+            col_met_a, col_met_b, col_met_c, col_met_d = st.columns(4)
+            with col_met_a:
+                st.metric("Total Tâches", len(historique_data))
+            with col_met_b:
+                total_temps = sum([entry.get("Temps (sec)", 0) for entry in historique_data])
+                heures_tot = int(total_temps // 3600)
+                min_tot = int((total_temps % 3600) // 60)
+                sec_tot = int(total_temps % 60)
+                st.metric("Temps Total", f"{heures_tot:02d}h{min_tot:02d}m{sec_tot:02d}s")
+            with col_met_c:
+                if len(historique_data) > 0:
+                    temps_moyen = total_temps / len(historique_data)
+                    h_moy = int(temps_moyen // 3600)
+                    m_moy = int((temps_moyen % 3600) // 60)
+                    s_moy = int(temps_moyen % 60)
+                    st.metric("Temps Moyen", f"{h_moy:02d}h{m_moy:02d}m{s_moy:02d}s")
+            with col_met_d:
+                types_counts = df_historique["Tâche"].value_counts()
+                if not types_counts.empty:
+                    st.metric("Types de tâches", len(types_counts))
+            
+            st.dataframe(
+                df_historique[["Date Début", "Date Fin", "Tâche", "Temps", "MATCH", "WF", "LIGUE", "Statut"]],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            col_exp1, col_exp2, col_exp3 = st.columns(3)
+            with col_exp1:
+                if st.button("📥 Exporter CSV", use_container_width=True):
+                    csv = df_historique.to_csv(index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="📥 Télécharger",
+                        data=csv,
+                        file_name=f"historique_taches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+            with col_exp2:
+                if st.button("🗑️ Effacer l'historique", use_container_width=True, type="secondary"):
+                    st.session_state.taches_operateur = {}
+                    agents_db = db_manager.get_all_agents()
+                    agent_id = None
+                    for ag in agents_db:
+                        if ag["nom"].lower() == st.session_state.user_actif.lower():
+                            agent_id = ag["id"]
+                            break
+                    if agent_id:
+                        conn = db_manager.get_db()
+                        c = conn.cursor()
+                        c.execute("DELETE FROM taches WHERE agent_id = ? AND statut = 'termine'", (agent_id,))
+                        conn.commit()
+                        conn.close()
+                    executer_sauvegarde_auto("clear_history", st.session_state.user_actif)
+                    st.toast("🗑️ Historique effacé", icon="🗑️")
+                    st.rerun()
+            with col_exp3:
+                if st.button("📊 Voir graphiques", use_container_width=True):
+                    fig = px.pie(
+                        df_historique,
+                        names="Tâche",
+                        title="Répartition des tâches",
+                        color_discrete_sequence=px.colors.qualitative.Set3
+                    )
+                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    df_temps = df_historique.groupby("Tâche")["Temps (sec)"].sum().reset_index()
+                    fig2 = px.bar(
+                        df_temps,
+                        x="Tâche",
+                        y="Temps (sec)",
+                        title="Temps total par type",
+                        color="Tâche",
+                        labels={"Temps (sec)": "Temps (secondes)"}
+                    )
+                    fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
+                                      xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                                      yaxis=dict(gridcolor='rgba(255,255,255,0.1)'))
+                    st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("Aucune tâche dans l'historique.")
     
-    # Préparer les données pour le tableau
-    historique_data = []
-    for tache, entries in st.session_state.taches_operateur.items():
-        for entry in entries:
-            historique_data.append({
-                "Date Début": entry.get("date_debut", "N/A"),
-                "Date Fin": entry.get("date_fin", "N/A"),
-                "Tâche": tache,
-                "Temps": entry.get("temps_formate", "N/A"),
-                "Temps (sec)": entry.get("temps_secondes", 0),
-                "MATCH": entry.get("match", "N/A"),
-                "WF": entry.get("wf", "N/A"),
-                "LIGUE": entry.get("ligue", "N/A"),
-                "REMARQUES": entry.get("remarques", "N/A"),
-                "Statut": entry.get("statut", "Terminé")
-            })
-    
-    if historique_data:
-        df_historique = pd.DataFrame(historique_data)
+    # --- EXPORT GOOGLE SHEETS (dans un expander) ---
+    with st.expander("📤 Export vers Google Sheets", expanded=False):
+        export_rows = []
+        for tache, entries in st.session_state.taches_operateur.items():
+            for entry in entries:
+                evenements = entry.get("evenements", [])
+                start_time = pause_time = reprise_time = fin_time = ""
+                for evt in evenements:
+                    if evt["type"] == "START":
+                        start_time = evt["time"]
+                    elif evt["type"] == "PAUSE":
+                        pause_time = evt["time"]
+                    elif evt["type"] == "REPRISE":
+                        reprise_time = evt["time"]
+                    elif evt["type"] == "FIN":
+                        fin_time = evt["time"]
+                export_rows.append({
+                    "START": formater_datetime_iso(start_time),
+                    "PAUSE": formater_datetime_iso(pause_time),
+                    "REPRISE": formater_datetime_iso(reprise_time),
+                    "FIN": formater_datetime_iso(fin_time),
+                    "DATE": entry.get("date_debut", "").split(" ")[0] if entry.get("date_debut") else "",
+                    "MATCH / WF": f"{entry.get('match', '')} / {entry.get('wf', '')}",
+                    "LIGUE": entry.get("ligue", ""),
+                    "TACHES": tache,
+                    "STATUTS": entry.get("statut", "Terminé"),
+                    "TOTAL": entry.get("temps_formate", ""),
+                    "REMARQUES": entry.get("remarques", "")
+                })
         
-        # Afficher les métriques
-        col_met_a, col_met_b, col_met_c, col_met_d = st.columns(4)
-        with col_met_a:
-            st.metric("📋 Total Tâches", len(historique_data))
-        with col_met_b:
-            # Utiliser get avec valeur par défaut 0 pour éviter KeyError
-            total_temps = sum([entry.get("Temps (sec)", 0) for entry in historique_data])
-            heures_tot = int(total_temps // 3600)
-            min_tot = int((total_temps % 3600) // 60)
-            sec_tot = int(total_temps % 60)
-            st.metric("⏱️ Temps Total", f"{heures_tot:02d}h{min_tot:02d}m{sec_tot:02d}s")
-        with col_met_c:
-            if len(historique_data) > 0:
-                temps_moyen = total_temps / len(historique_data)
-                h_moy = int(temps_moyen // 3600)
-                m_moy = int((temps_moyen % 3600) // 60)
-                s_moy = int(temps_moyen % 60)
-                st.metric("📊 Temps Moyen", f"{h_moy:02d}h{m_moy:02d}m{s_moy:02d}s")
-        with col_met_d:
-            # Compter par type de tâche
-            types_counts = df_historique["Tâche"].value_counts()
-            if not types_counts.empty:
-                st.metric("🏷️ Types de tâches", len(types_counts))
-        
-        # Afficher le tableau
-        st.dataframe(
-            df_historique[["Date Début", "Date Fin", "Tâche", "Temps", "MATCH", "WF", "LIGUE", "Statut"]],
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # Boutons d'action
-        col_exp1, col_exp2, col_exp3 = st.columns(3)
-        
-        with col_exp1:
-            if st.button("📥 Exporter CSV", use_container_width=True):
-                csv = df_historique.to_csv(index=False, encoding='utf-8-sig')
-                st.download_button(
-                    label="📥 Télécharger",
-                    data=csv,
-                    file_name=f"historique_taches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-        
-        with col_exp2:
-            if st.button("🗑️ Effacer l'historique", use_container_width=True, type="secondary"):
-                st.session_state.taches_operateur = {}
-                executer_sauvegarde_auto("clear_history", st.session_state.user_actif)
-                st.toast("🗑️ Historique effacé", icon="🗑️")
-                st.rerun()
-        
-        with col_exp3:
-            # Graphique de répartition
-            if st.button("📊 Voir graphiques", use_container_width=True):
-                # Créer un graphique de répartition des tâches
-                fig = px.pie(
-                    df_historique,
-                    names="Tâche",
-                    title="Répartition des tâches",
-                    color_discrete_sequence=px.colors.qualitative.Set3
-                )
-                fig.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    font_color='#e2e8f0'
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Graphique des temps par tâche
-                df_temps = df_historique.groupby("Tâche")["Temps (sec)"].sum().reset_index()
-                fig2 = px.bar(
-                    df_temps,
-                    x="Tâche",
-                    y="Temps (sec)",
-                    title="Temps total par type de tâche",
-                    color="Tâche",
-                    labels={"Temps (sec)": "Temps (secondes)"}
-                )
-                fig2.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    font_color='#e2e8f0',
-                    xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-                    yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
-                )
-                st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.info("📋 Aucune tâche dans l'historique. Utilisez le chronomètre pour suivre vos activités.")
+        if export_rows:
+            df_export = pd.DataFrame(export_rows)
+            st.dataframe(df_export, use_container_width=True, hide_index=True)
+            if st.button("📤 Exporter vers Google Sheets", type="primary", use_container_width=True):
+                try:
+                    SPREADSHEET_ID = st.secrets["google_sheets"]["spreadsheet_id"]
+                except:
+                    SPREADSHEET_ID = None
+                    st.error("❌ SPREADSHEET_ID non configuré dans les secrets.")
+                if SPREADSHEET_ID:
+                    success, msg = exporter_vers_google_sheets(st.session_state.user_actif, df_export, SPREADSHEET_ID)
+                    if success:
+                        st.success(msg)
+                        st.toast("📤 Export effectué", icon="✅")
+                    else:
+                        st.error(msg)
+        else:
+            st.info("Aucune donnée à exporter.")
 
 # --- PAGE RÉSUMÉ & PLANNING OPÉRATEUR ---
 def page_operateur_resume():
@@ -1225,19 +1676,22 @@ def page_operateur_resume():
     
     # Charger les données depuis l'admin si disponibles
     user_login = st.session_state.user_actif
+    agents_db = db_manager.get_all_agents()
     
     # Vérifier si l'utilisateur existe dans la liste des agents
     agent_trouve = False
     agent_info = None
+    agent_id = None
     
-    for agent in st.session_state.agents:
-        if agent["Nom"].lower() == user_login.lower():
+    for agent in agents_db:
+        if agent["nom"].lower() == user_login.lower():
             agent_trouve = True
             agent_info = agent
+            agent_id = agent["id"]
             break
     
     if agent_trouve:
-        st.success(f"✅ Bienvenue {agent_info['Nom']} - {agent_info['Poste']}")
+        st.success(f"✅ Bienvenue {agent_info['nom']} - {agent_info['poste']}")
         
         # --- SECTION PLANNING ---
         st.markdown("---")
@@ -1272,7 +1726,8 @@ def page_operateur_resume():
             for i, j in enumerate(semaine_choisie):
                 if j != 0:
                     date_cle = f"{annee_sel}-{mois_sel:02d}-{j:02d}"
-                    statut = st.session_state.planning.get(date_cle, {}).get(user_login, "Non défini")
+                    planning_date = db_manager.get_planning_for_date(date_cle)
+                    statut = planning_date.get(agent_id, "Non défini")
                     planning_agent[noms_jours[i]] = statut
                     jours_planning.append({
                         "Jour": noms_jours[i],
@@ -1323,28 +1778,23 @@ def page_operateur_resume():
         
         for jour in range(1, max_jours + 1):
             date_cle = f"{annee_sel}-{mois_heures:02d}-{jour:02d}"
-            if date_cle in st.session_state.heures:
-                donnee = st.session_state.heures[date_cle].get(user_login, None)
-                if donnee:
-                    if isinstance(donnee, dict):
-                        heures = donnee.get("total", 0)
-                        heures_nuit = donnee.get("nuit", 0)
-                    else:
-                        heures = float(donnee)
-                        heures_nuit = 0
-                    
-                    if heures > 0:
-                        dt_obj = datetime(annee_sel, mois_heures, jour)
-                        heures_agent.append({
-                            "Date": f"{jour:02d}/{mois_heures:02d}/{annee_sel}",
-                            "Jour": noms_jours[dt_obj.weekday()],
-                            "Heures": formater_en_duree(heures),
-                            "Heures Nuit": formater_en_duree(heures_nuit),
-                            "Heures (num)": heures
-                        })
-                        total_heures_mois += heures
-                        total_heures_nuit_mois += heures_nuit
-                        jours_travailles += 1
+            heures_date = db_manager.get_heures_for_date(date_cle)
+            donnee = heures_date.get(agent_id)
+            if donnee:
+                heures = donnee.get("total", 0)
+                heures_nuit = donnee.get("nuit", 0)
+                if heures > 0:
+                    dt_obj = datetime(annee_sel, mois_heures, jour)
+                    heures_agent.append({
+                        "Date": f"{jour:02d}/{mois_heures:02d}/{annee_sel}",
+                        "Jour": noms_jours[dt_obj.weekday()],
+                        "Heures": formater_en_duree(heures),
+                        "Heures Nuit": formater_en_duree(heures_nuit),
+                        "Heures (num)": heures
+                    })
+                    total_heures_mois += heures
+                    total_heures_nuit_mois += heures_nuit
+                    jours_travailles += 1
         
         if heures_agent:
             df_heures = pd.DataFrame(heures_agent)
@@ -1373,7 +1823,7 @@ def page_operateur_resume():
         st.markdown("---")
         st.markdown("### 📈 Résumé de mes activités")
         
-        # Récupérer les tâches de l'opérateur
+        # Récupérer les tâches de l'opérateur depuis la session
         taches_agent = []
         for tache, entries in st.session_state.taches_operateur.items():
             for entry in entries:
@@ -1438,8 +1888,464 @@ def page_operateur_resume():
             Veuillez contacter l'administrateur pour que votre compte soit lié à un agent dans la base de données.
             
             **Agents disponibles :**
-            {', '.join([a['Nom'] for a in st.session_state.agents])}
+            {', '.join([a['nom'] for a in agents_db])}
         """)
+
+# --- NOUVELLE PAGE : STATISTIQUES & ANALYSES (OPÉRATEUR) ---
+def page_operateur_stats():
+    st.title("📊 Statistiques & Analyses")
+    
+    # Informations utilisateur
+    st.markdown(f"""
+        <div style="
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px 20px;
+            border-radius: 12px;
+            border-left: 4px solid #4CAF50;
+            margin-bottom: 20px;
+        ">
+            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
+            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
+            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Récupérer les données des tâches terminées
+    taches_data = st.session_state.taches_operateur
+    if not taches_data:
+        st.info("📋 Aucune tâche terminée. Commencez à utiliser le chronomètre pour générer des statistiques.")
+        return
+    
+    # Construire un DataFrame complet
+    records = []
+    for tache, entries in taches_data.items():
+        for entry in entries:
+            records.append({
+                "tache": tache,
+                "date_debut": entry.get("date_debut", ""),
+                "date_fin": entry.get("date_fin", ""),
+                "temps_secondes": entry.get("temps_secondes", 0),
+                "temps_formate": entry.get("temps_formate", ""),
+                "match": entry.get("match", ""),
+                "wf": entry.get("wf", ""),
+                "ligue": entry.get("ligue", ""),
+                "remarques": entry.get("remarques", "")
+            })
+    
+    df = pd.DataFrame(records)
+    if df.empty:
+        st.info("Aucune donnée à afficher.")
+        return
+    
+    # Convertir les dates
+    df["date_debut_dt"] = pd.to_datetime(df["date_debut"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    df["date_fin_dt"] = pd.to_datetime(df["date_fin"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    df["date"] = df["date_debut_dt"].dt.date
+    df["jour"] = df["date_debut_dt"].dt.date
+    df["mois"] = df["date_debut_dt"].dt.to_period("M")
+    df["semaine"] = df["date_debut_dt"].dt.to_period("W")
+    
+    # Filtres de période
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📅 Filtres")
+    date_min = df["date"].min()
+    date_max = df["date"].max()
+    col_filtre1, col_filtre2 = st.sidebar.columns(2)
+    with col_filtre1:
+        date_debut_filtre = st.date_input("Date début", value=date_min, min_value=date_min, max_value=date_max)
+    with col_filtre2:
+        date_fin_filtre = st.date_input("Date fin", value=date_max, min_value=date_min, max_value=date_max)
+    
+    # Appliquer les filtres
+    mask = (df["date"] >= date_debut_filtre) & (df["date"] <= date_fin_filtre)
+    df_filtre = df[mask]
+    if df_filtre.empty:
+        st.warning("Aucune donnée pour la période sélectionnée.")
+        return
+    
+    # Métriques globales
+    total_taches = len(df_filtre)
+    total_temps_sec = df_filtre["temps_secondes"].sum()
+    moyenne_sec = df_filtre["temps_secondes"].mean() if total_taches > 0 else 0
+    mediane_sec = df_filtre["temps_secondes"].median() if total_taches > 0 else 0
+    max_sec = df_filtre["temps_secondes"].max() if total_taches > 0 else 0
+    min_sec = df_filtre["temps_secondes"].min() if total_taches > 0 else 0
+    
+    # Fonction de formatage
+    def sec_to_hms(sec):
+        h = int(sec // 3600)
+        m = int((sec % 3600) // 60)
+        s = int(sec % 60)
+        return f"{h:02d}h{m:02d}m{s:02d}s"
+    
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1.metric("📋 Tâches", total_taches)
+    col2.metric("⏱️ Total", sec_to_hms(total_temps_sec))
+    col3.metric("📊 Moyenne", sec_to_hms(moyenne_sec))
+    col4.metric("📈 Médiane", sec_to_hms(mediane_sec))
+    col5.metric("🔺 Max", sec_to_hms(max_sec))
+    col6.metric("🔻 Min", sec_to_hms(min_sec))
+    
+    st.markdown("---")
+    
+    # Graphiques
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        # Répartition par type de tâche (camembert)
+        fig_pie = px.pie(
+            df_filtre,
+            names="tache",
+            title="Répartition des tâches par type",
+            color_discrete_sequence=px.colors.qualitative.Set3
+        )
+        fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0')
+        st.plotly_chart(fig_pie, use_container_width=True)
+    
+    with col_g2:
+        # Évolution des temps par jour (histogramme)
+        df_jour = df_filtre.groupby("jour")["temps_secondes"].sum().reset_index()
+        df_jour["jour_str"] = df_jour["jour"].astype(str)
+        fig_bar = px.bar(
+            df_jour,
+            x="jour_str",
+            y="temps_secondes",
+            title="Temps total par jour",
+            labels={"temps_secondes": "Temps (secondes)", "jour_str": "Date"},
+            color_discrete_sequence=["#4CAF50"]
+        )
+        fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
+                              xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                              yaxis=dict(gridcolor='rgba(255,255,255,0.1)'))
+        st.plotly_chart(fig_bar, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Tableau récapitulatif par type de tâche
+    st.subheader("📋 Performances par type de tâche")
+    df_type = df_filtre.groupby("tache").agg(
+        nombre=("tache", "count"),
+        temps_total=("temps_secondes", "sum"),
+        temps_moyen=("temps_secondes", "mean"),
+        temps_max=("temps_secondes", "max"),
+        temps_min=("temps_secondes", "min")
+    ).reset_index()
+    df_type["temps_total_str"] = df_type["temps_total"].apply(sec_to_hms)
+    df_type["temps_moyen_str"] = df_type["temps_moyen"].apply(sec_to_hms)
+    df_type["temps_max_str"] = df_type["temps_max"].apply(sec_to_hms)
+    df_type["temps_min_str"] = df_type["temps_min"].apply(sec_to_hms)
+    
+    st.dataframe(
+        df_type[["tache", "nombre", "temps_total_str", "temps_moyen_str", "temps_max_str", "temps_min_str"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "tache": "Type de tâche",
+            "nombre": "Nombre",
+            "temps_total_str": "Temps total",
+            "temps_moyen_str": "Temps moyen",
+            "temps_max_str": "Temps max",
+            "temps_min_str": "Temps min"
+        }
+    )
+    
+    # Performance quotidienne
+    st.markdown("---")
+    st.subheader("📅 Performance quotidienne")
+    df_perf_jour = df_filtre.groupby("jour").agg(
+        nb_taches=("tache", "count"),
+        temps_total=("temps_secondes", "sum"),
+        temps_moyen=("temps_secondes", "mean")
+    ).reset_index()
+    df_perf_jour["jour_str"] = df_perf_jour["jour"].astype(str)
+    df_perf_jour["temps_total_str"] = df_perf_jour["temps_total"].apply(sec_to_hms)
+    df_perf_jour["temps_moyen_str"] = df_perf_jour["temps_moyen"].apply(sec_to_hms)
+    
+    st.dataframe(
+        df_perf_jour[["jour_str", "nb_taches", "temps_total_str", "temps_moyen_str"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "jour_str": "Date",
+            "nb_taches": "Tâches",
+            "temps_total_str": "Temps total",
+            "temps_moyen_str": "Temps moyen"
+        }
+    )
+    
+    # Graphique d'évolution du nombre de tâches par jour
+    fig_line = px.line(
+        df_perf_jour,
+        x="jour_str",
+        y="nb_taches",
+        title="Évolution du nombre de tâches par jour",
+        labels={"nb_taches": "Nombre de tâches", "jour_str": "Date"},
+        markers=True
+    )
+    fig_line.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
+                           xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                           yaxis=dict(gridcolor='rgba(255,255,255,0.1)'))
+    st.plotly_chart(fig_line, use_container_width=True)
+
+# --- PAGE CHAT AMÉLIORÉE AVEC EMOJI, STICKERS, PHOTO ET EFFACER TOUT ---
+def page_chat():
+    st.title("💬 Chat Interne")
+    
+    # Informations utilisateur
+    st.markdown(f"""
+        <div style="
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px 20px;
+            border-radius: 12px;
+            border-left: 4px solid #4CAF50;
+            margin-bottom: 20px;
+        ">
+            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
+            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
+            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #94a3b8; margin-left: 20px;">💬 {len(get_chat_messages(limit=1000))} messages</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # --- BOUTON EFFACER TOUS LES MESSAGES ---
+    col_clear, _ = st.columns([1, 3])
+    with col_clear:
+        if st.button("🗑️ Effacer tous les messages", type="secondary", use_container_width=True):
+            if st.session_state.get("confirm_clear", False):
+                clear_all_messages()
+                st.session_state.confirm_clear = False
+                st.toast("✅ Tous les messages ont été supprimés !", icon="🗑️")
+                st.rerun()
+            else:
+                st.session_state.confirm_clear = True
+                st.warning("⚠️ Cliquez à nouveau pour confirmer la suppression définitive.")
+    
+    # --- AFFICHAGE DES MESSAGES ---
+    st.markdown("---")
+    st.markdown("### 📜 Historique des messages")
+    
+    messages = get_chat_messages(limit=50)
+    if not messages:
+        st.info("Aucun message pour le moment. Soyez le premier à écrire !")
+    else:
+        for msg in reversed(messages):
+            with st.container():
+                col_left, col_right = st.columns([1, 5])
+                with col_left:
+                    st.markdown(f"**{msg['full_name'] or msg['username']}**")
+                with col_right:
+                    # Message texte
+                    st.markdown(f"<div class='chat-message'><span class='sender'>{msg['full_name'] or msg['username']}</span> <span class='timestamp'>{datetime.fromisoformat(msg['timestamp']).strftime('%d/%m/%Y %H:%M')}</span><div class='content'>{msg['text']}</div>", unsafe_allow_html=True)
+                    # Pièce jointe (image)
+                    if msg.get('attachment'):
+                        try:
+                            # L'attachment est stocké en base64
+                            img_data = base64.b64decode(msg['attachment'])
+                            st.image(img_data, use_container_width=True)
+                        except:
+                            st.write("📎 [Pièce jointe non affichable]")
+                st.markdown("---")
+    
+    # --- ZONE DE SAISIE AVEC EMOJI, STICKERS ET PHOTO ---
+    st.markdown("### ✉️ Écrire un message")
+    
+    # Espace emoji / stickers dans un expander
+    with st.expander("😊 Emojis & Stickers", expanded=False):
+        st.markdown("#### Emojis")
+        emojis = ["😊", "👍", "❤️", "😂", "😍", "🔥", "👏", "🎉", "💪", "🙌", "🤝", "✨"]
+        cols_emoji = st.columns(len(emojis))
+        for i, emoji in enumerate(emojis):
+            with cols_emoji[i]:
+                if st.button(emoji, key=f"emoji_{i}", help="Insérer l'emoji"):
+                    st.session_state.chat_message_text += emoji
+                    st.rerun()
+        
+        st.markdown("#### Stickers")
+        stickers = ["🌟", "🌈", "💯", "🚀", "🎯", "⭐", "🔥", "💎", "🎈", "🎁", "🏆", "📌"]
+        cols_sticker = st.columns(len(stickers))
+        for i, sticker in enumerate(stickers):
+            with cols_sticker[i]:
+                if st.button(sticker, key=f"sticker_{i}", help="Insérer le sticker"):
+                    st.session_state.chat_message_text += sticker
+                    st.rerun()
+    
+    # Formulaire d'envoi avec photo
+    with st.form(key="chat_form", clear_on_submit=True):
+        # Zone de saisie
+        message_input = st.text_area(
+            "Message",
+            value=st.session_state.chat_message_text,
+            placeholder="Tapez votre message ici...",
+            height=100,
+            key="chat_text_area"
+        )
+        # Mettre à jour la session quand l'utilisateur tape
+        if message_input != st.session_state.chat_message_text:
+            st.session_state.chat_message_text = message_input
+        
+        # Upload de photo
+        uploaded_file = st.file_uploader("📎 Ajouter une photo", type=["jpg", "jpeg", "png", "gif"], accept_multiple_files=False)
+        
+        col_submit, col_clear_input = st.columns([1, 1])
+        with col_submit:
+            submitted = st.form_submit_button("📤 Envoyer", type="primary", use_container_width=True)
+        with col_clear_input:
+            clear_input = st.form_submit_button("🔄 Effacer le texte", use_container_width=True)
+            if clear_input:
+                st.session_state.chat_message_text = ""
+                st.rerun()
+        
+        if submitted:
+            # Récupérer le texte depuis la session (car clear_on_submit efface la zone)
+            text_to_send = st.session_state.chat_message_text.strip()
+            if text_to_send or uploaded_file:
+                # Traiter la photo
+                attachment_base64 = None
+                if uploaded_file:
+                    try:
+                        # Lire et encoder en base64
+                        img_bytes = uploaded_file.read()
+                        attachment_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                    except Exception as e:
+                        st.error(f"Erreur lors du traitement de l'image : {e}")
+                
+                # Envoyer
+                users = load_users()
+                full_name = users.get(st.session_state.user_actif, {}).get("full_name", st.session_state.user_actif)
+                send_chat_message(st.session_state.user_actif, full_name, text_to_send, attachment_base64)
+                st.session_state.chat_message_text = ""
+                st.toast("✅ Message envoyé !", icon="✅")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.warning("⚠️ Veuillez écrire un message ou ajouter une photo.")
+
+# --- NOUVELLE PAGE : RÉPARTITION DES TÂCHES (KANBAN) ---
+def page_operateur_shared_tasks():
+    st.title("📋 Répartition des Tâches")
+    
+    # En-tête utilisateur simplifié
+    st.markdown(f"""
+        <div style="
+            background: rgba(255, 255, 255, 0.03);
+            padding: 10px 18px;
+            border-radius: 10px;
+            border-left: 3px solid #4CAF50;
+            margin-bottom: 18px;
+        ">
+            <span style="color: #4CAF50; font-weight: 500;">👤 {st.session_state.user_actif}</span>
+            <span style="color: #94a3b8; margin-left: 20px; font-size: 0.9em;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Récupération des tâches partagées
+    shared_tasks = get_all_shared_tasks()
+    # Récupération de la liste des agents (utilisateurs avec rôle 'operateur')
+    users = load_users()
+    agent_names = [u for u, info in users.items() if info.get("role") == "operateur"]
+    # Si aucun agent dans users, on prend ceux de la table agents
+    if not agent_names:
+        agents_db = db_manager.get_all_agents()
+        agent_names = [a["nom"] for a in agents_db]
+    
+    # --- FORMULAIRE D'AJOUT DE TÂCHE ---
+    with st.expander("➕ Ajouter une nouvelle tâche", expanded=False):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            new_tache = st.text_input("Tâche", placeholder="Ex: INTEGRATION")
+        with col2:
+            new_match = st.text_input("Match", placeholder="vs")
+        with col3:
+            new_wf = st.text_input("WF", placeholder="Workflow")
+        with col4:
+            new_ligue = st.text_input("Ligue", placeholder="Ligue")
+        new_remarques = st.text_area("Remarques", placeholder="Informations complémentaires", height=68)
+        if st.button("📌 Ajouter la tâche", type="primary"):
+            if new_tache.strip():
+                add_shared_task(new_tache.strip(), new_match.strip(), new_wf.strip(), new_ligue.strip(), new_remarques.strip())
+                st.toast("✅ Tâche ajoutée !", icon="✅")
+                st.rerun()
+            else:
+                st.warning("⚠️ Veuillez saisir une tâche.")
+    
+    st.markdown("---")
+    
+    # --- AFFICHAGE EN DEUX COLONNES : TÂCHES DISPONIBLES ET TÂCHES ASSIGNÉES PAR AGENT ---
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.markdown("### 📌 Tâches disponibles")
+        tasks_disponibles = [t for t in shared_tasks if t["statut"] == "disponible" or t["assigne_a"] is None]
+        if tasks_disponibles:
+            for task in tasks_disponibles:
+                with st.container():
+                    st.markdown(f"""
+                        <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 10px; margin-bottom: 8px; border-left: 3px solid #4CAF50;">
+                            <div style="font-weight: 500;">{task['tache']}</div>
+                            <div style="font-size: 0.8em; color: #94a3b8;">
+                                Match: {task['match_info']} | WF: {task['wf']} | Ligue: {task['ligue']}
+                            </div>
+                            <div style="font-size: 0.8em; color: #94a3b8;">Remarques: {task['remarques']}</div>
+                            <div style="font-size: 0.7em; color: #64748b;">Créé le: {task['date_creation'][:16]}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    # Menu déroulant pour assigner à un agent
+                    col_assign, col_del = st.columns([3, 1])
+                    with col_assign:
+                        selected_agent = st.selectbox(
+                            "Assigner à",
+                            options=[""] + agent_names,
+                            key=f"assign_{task['id']}",
+                            label_visibility="collapsed"
+                        )
+                        if selected_agent:
+                            update_shared_task(task["id"], assigne_a=selected_agent, statut="assignee")
+                            st.toast(f"✅ Tâche assignée à {selected_agent}", icon="✅")
+                            st.rerun()
+                    with col_del:
+                        if st.button("🗑️", key=f"del_{task['id']}"):
+                            delete_shared_task(task["id"])
+                            st.toast("🗑️ Tâche supprimée", icon="🗑️")
+                            st.rerun()
+                    st.markdown("---")
+        else:
+            st.info("Aucune tâche disponible.")
+    
+    with col_right:
+        st.markdown("### 👥 Tâches assignées par agent")
+        if agent_names:
+            # Pour chaque agent, on affiche ses tâches
+            for agent in agent_names:
+                tasks_agent = [t for t in shared_tasks if t["assigne_a"] == agent and t["statut"] != "termine"]
+                with st.expander(f"👤 {agent} ({len(tasks_agent)})", expanded=False):
+                    if tasks_agent:
+                        for task in tasks_agent:
+                            with st.container():
+                                st.markdown(f"""
+                                    <div style="background: rgba(255,255,255,0.02); border-radius: 6px; padding: 8px; margin-bottom: 6px; border-left: 2px solid #FFA726;">
+                                        <div style="font-weight: 500;">{task['tache']}</div>
+                                        <div style="font-size: 0.8em; color: #94a3b8;">
+                                            Match: {task['match_info']} | WF: {task['wf']} | Ligue: {task['ligue']}
+                                        </div>
+                                        <div style="font-size: 0.7em; color: #64748b;">Remarques: {task['remarques']}</div>
+                                    </div>
+                                """, unsafe_allow_html=True)
+                                col_mark, col_unassign = st.columns([1, 1])
+                                with col_mark:
+                                    if st.button("✅ Terminée", key=f"done_{task['id']}"):
+                                        update_shared_task(task["id"], statut="termine")
+                                        st.toast("✅ Tâche marquée comme terminée", icon="✅")
+                                        st.rerun()
+                                with col_unassign:
+                                    if st.button("↩️ Réassigner", key=f"unassign_{task['id']}"):
+                                        update_shared_task(task["id"], assigne_a=None, statut="disponible")
+                                        st.toast("↩️ Tâche réassignée (disponible)", icon="↩️")
+                                        st.rerun()
+                                st.markdown("---")
+                    else:
+                        st.caption("Aucune tâche assignée.")
+        else:
+            st.info("Aucun agent trouvé.")
 
 # --- BARRE LATÉRALE GLOBALE AVEC AFFICHAGE DU RÔLE ---
 with st.sidebar:
@@ -1513,6 +2419,23 @@ with st.sidebar:
         
         confirmer_reset = st.checkbox("Autoriser la remise à zéro")
         if st.button("🚨 Réinitialiser l'interface", type="primary", use_container_width=True, disabled=not confirmer_reset):
+            # Effacer les tables (sauf utilisateurs)
+            conn = db_manager.get_db()
+            c = conn.cursor()
+            c.execute("DELETE FROM agents")
+            c.execute("DELETE FROM planning")
+            c.execute("DELETE FROM heures")
+            c.execute("DELETE FROM taches")
+            c.execute("DELETE FROM cloud_data")
+            c.execute("DELETE FROM pointages")
+            c.execute("DELETE FROM messages")  # aussi effacer les messages
+            c.execute("DELETE FROM shared_tasks")  # effacer les tâches partagées
+            conn.commit()
+            conn.close()
+            # Réinitialiser les agents par défaut
+            for agent in AGENTS_PAR_DEFAUT:
+                db_manager.add_agent(agent["Nom"], agent["Poste"])
+            
             st.session_state.agents = list(AGENTS_PAR_DEFAUT)
             st.session_state.planning = {}
             st.session_state.heures = {}
@@ -1686,21 +2609,22 @@ def convertir_temps_en_heures(val_str):
     except Exception:
         return 0.0
 
-# --- FONCTIONS POUR L'ANALYSE DES PERFORMANCES ---
+# --- FONCTIONS POUR L'ANALYSE DES PERFORMANCES (adaptées pour colonnes minuscules) ---
 def calculer_stats_agent(donnees_cloud, nom_agent, date_debut=None, date_fin=None):
     if not donnees_cloud:
         return None
     
     df = pd.DataFrame(donnees_cloud)
-    df_agent = df[df["Source_Feuille"] == nom_agent]
+    # Utiliser les noms de colonnes en minuscules
+    df_agent = df[df["source_feuille"] == nom_agent]
     
     if df_agent.empty:
         return None
     
-    if date_debut and "Date_Parsed" in df_agent.columns:
-        df_agent = df_agent[df_agent["Date_Parsed"] >= pd.to_datetime(date_debut)]
-    if date_fin and "Date_Parsed" in df_agent.columns:
-        df_agent = df_agent[df_agent["Date_Parsed"] <= pd.to_datetime(date_fin)]
+    if date_debut and "date_parsed" in df_agent.columns:
+        df_agent = df_agent[df_agent["date_parsed"] >= pd.to_datetime(date_debut)]
+    if date_fin and "date_parsed" in df_agent.columns:
+        df_agent = df_agent[df_agent["date_parsed"] <= pd.to_datetime(date_fin)]
     
     if df_agent.empty:
         return None
@@ -1708,21 +2632,21 @@ def calculer_stats_agent(donnees_cloud, nom_agent, date_debut=None, date_fin=Non
     stats = {
         "nom": nom_agent,
         "total_taches": len(df_agent),
-        "total_heures": df_agent["Duree_Num"].sum(),
-        "moyenne_heures": df_agent["Duree_Num"].mean(),
-        "max_heures": df_agent["Duree_Num"].max(),
-        "min_heures": df_agent["Duree_Num"].min(),
-        "types_travail": df_agent["Type_Travail"].value_counts().to_dict(),
-        "taches_par_jour": df_agent.groupby("Jour").size().to_dict(),
-        "heures_par_jour": df_agent.groupby("Jour")["Duree_Num"].sum().to_dict(),
-        "statuts": df_agent["Statut"].value_counts().to_dict() if "Statut" in df_agent.columns else {}
+        "total_heures": df_agent["duree_num"].sum(),
+        "moyenne_heures": df_agent["duree_num"].mean(),
+        "max_heures": df_agent["duree_num"].max(),
+        "min_heures": df_agent["duree_num"].min(),
+        "types_travail": df_agent["type_travail"].value_counts().to_dict(),
+        "taches_par_jour": df_agent.groupby("jour").size().to_dict(),
+        "heures_par_jour": df_agent.groupby("jour")["duree_num"].sum().to_dict(),
+        "statuts": df_agent["statut"].value_counts().to_dict() if "statut" in df_agent.columns else {}
     }
     
     vitesse_par_type = {}
-    for type_travail in df_agent["Type_Travail"].unique():
-        df_type = df_agent[df_agent["Type_Travail"] == type_travail]
+    for type_travail in df_agent["type_travail"].unique():
+        df_type = df_agent[df_agent["type_travail"] == type_travail]
         if not df_type.empty:
-            vitesse = len(df_type) / df_type["Duree_Num"].sum() if df_type["Duree_Num"].sum() > 0 else 0
+            vitesse = len(df_type) / df_type["duree_num"].sum() if df_type["duree_num"].sum() > 0 else 0
             vitesse_par_type[type_travail] = round(vitesse, 2)
     
     stats["vitesse_par_type"] = vitesse_par_type
@@ -1740,16 +2664,16 @@ def calculer_stats_tous_agents(donnees_cloud, date_debut=None, date_fin=None):
     
     df = pd.DataFrame(donnees_cloud)
     
-    if date_debut and "Date_Parsed" in df.columns:
-        df = df[df["Date_Parsed"] >= pd.to_datetime(date_debut)]
-    if date_fin and "Date_Parsed" in df.columns:
-        df = df[df["Date_Parsed"] <= pd.to_datetime(date_fin)]
+    if date_debut and "date_parsed" in df.columns:
+        df = df[df["date_parsed"] >= pd.to_datetime(date_debut)]
+    if date_fin and "date_parsed" in df.columns:
+        df = df[df["date_parsed"] <= pd.to_datetime(date_fin)]
     
     if df.empty:
         return {}
     
     stats_tous = {}
-    for agent in df["Source_Feuille"].unique():
+    for agent in df["source_feuille"].unique():
         stats = calculer_stats_agent(donnees_cloud, agent, date_debut, date_fin)
         if stats:
             stats_tous[agent] = stats
@@ -1765,15 +2689,22 @@ def page_gestion_agents():
         st.warning("🚫 Accès non autorisé.")
         return
     
+    # Récupérer les agents depuis la DB
+    agents_db = db_manager.get_all_agents()
+    # Mettre à jour la session pour compatibilité avec le reste du code
+    st.session_state.agents = [{"Nom": a["nom"], "Poste": a["poste"], "id": a["id"]} for a in agents_db]
+    
     # Métriques principales
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Effectif Total", len(st.session_state.agents))
-    col2.metric("Agents Actifs", len([a for a in st.session_state.agents if a.get("actif", True)]))
+    col1.metric("Effectif Total", len(agents_db))
+    col2.metric("Agents Actifs", len([a for a in agents_db if a.get("actif", 1) == 1]))
     
-    if st.session_state.get("donnees_cloud_centralisees"):
-        df_cloud = pd.DataFrame(st.session_state["donnees_cloud_centralisees"])
+    # Utiliser les données cloud depuis la DB
+    cloud_data = db_manager.get_all_cloud_data()
+    if cloud_data:
+        df_cloud = pd.DataFrame(cloud_data)
         total_taches = len(df_cloud)
-        total_heures = df_cloud["Duree_Num"].sum() if "Duree_Num" in df_cloud.columns else 0
+        total_heures = df_cloud["duree_num"].sum() if "duree_num" in df_cloud.columns else 0
         col3.metric("Tâches Totales", total_taches)
         col4.metric("Heures Totales", formater_en_duree(total_heures))
     else:
@@ -1795,13 +2726,8 @@ def page_gestion_agents():
     # --- RÉSUMÉ DES PERFORMANCES PAR AGENT ---
     st.markdown("### 📊 Résumé des Performances par Agent")
     
-    if st.session_state.get("donnees_cloud_centralisees"):
-        stats_tous = calculer_stats_tous_agents(
-            st.session_state["donnees_cloud_centralisees"],
-            date_debut_perf,
-            date_fin_perf
-        )
-        
+    if cloud_data:
+        stats_tous = calculer_stats_tous_agents(cloud_data, date_debut_perf, date_fin_perf)
         if stats_tous:
             resume_data = []
             for agent, stats in stats_tous.items():
@@ -1841,18 +2767,18 @@ def page_gestion_agents():
     # --- GRAPHIQUE D'ACTIVITÉ ---
     st.markdown("### 📈 Graphique d'Activité des Agents")
     
-    if st.session_state.get("donnees_cloud_centralisees"):
-        df_cloud = pd.DataFrame(st.session_state["donnees_cloud_centralisees"])
+    if cloud_data:
+        df_cloud = pd.DataFrame(cloud_data)
         
-        if date_debut_perf and "Date_Parsed" in df_cloud.columns:
-            df_cloud = df_cloud[df_cloud["Date_Parsed"] >= pd.to_datetime(date_debut_perf)]
-        if date_fin_perf and "Date_Parsed" in df_cloud.columns:
-            df_cloud = df_cloud[df_cloud["Date_Parsed"] <= pd.to_datetime(date_fin_perf)]
+        if date_debut_perf and "date_parsed" in df_cloud.columns:
+            df_cloud = df_cloud[df_cloud["date_parsed"] >= pd.to_datetime(date_debut_perf)]
+        if date_fin_perf and "date_parsed" in df_cloud.columns:
+            df_cloud = df_cloud[df_cloud["date_parsed"] <= pd.to_datetime(date_fin_perf)]
         
         if not df_cloud.empty:
             fig1 = px.pie(
                 df_cloud, 
-                names="Source_Feuille", 
+                names="source_feuille", 
                 title="Répartition des Tâches par Agent",
                 color_discrete_sequence=px.colors.qualitative.Set3
             )
@@ -1864,15 +2790,15 @@ def page_gestion_agents():
             )
             st.plotly_chart(fig1, use_container_width=True)
             
-            if "Date_Parsed" in df_cloud.columns:
-                df_heures = df_cloud.groupby(["Source_Feuille", "Jour"])["Duree_Num"].sum().reset_index()
+            if "date_parsed" in df_cloud.columns:
+                df_heures = df_cloud.groupby(["source_feuille", "jour"])["duree_num"].sum().reset_index()
                 fig2 = px.line(
                     df_heures,
-                    x="Jour",
-                    y="Duree_Num",
-                    color="Source_Feuille",
+                    x="jour",
+                    y="duree_num",
+                    color="source_feuille",
                     title="Évolution des Heures Travaillées par Agent",
-                    labels={"Duree_Num": "Heures", "Jour": "Date"}
+                    labels={"duree_num": "Heures", "jour": "Date"}
                 )
                 fig2.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)',
@@ -1884,12 +2810,12 @@ def page_gestion_agents():
                 )
                 st.plotly_chart(fig2, use_container_width=True)
             
-            df_types = df_cloud.groupby(["Source_Feuille", "Type_Travail"]).size().reset_index(name="Nombre")
+            df_types = df_cloud.groupby(["source_feuille", "type_travail"]).size().reset_index(name="Nombre")
             fig3 = px.bar(
                 df_types,
-                x="Source_Feuille",
+                x="source_feuille",
                 y="Nombre",
-                color="Type_Travail",
+                color="type_travail",
                 title="Types de Tâches par Agent",
                 barmode="group"
             )
@@ -1903,10 +2829,10 @@ def page_gestion_agents():
             )
             st.plotly_chart(fig3, use_container_width=True)
             
-            if "Duree_Num" in df_cloud.columns and "Source_Feuille" in df_cloud.columns:
-                df_perf = df_cloud.groupby("Source_Feuille").agg({
-                    "Duree_Num": "sum",
-                    "Type_Travail": "count"
+            if "duree_num" in df_cloud.columns and "source_feuille" in df_cloud.columns:
+                df_perf = df_cloud.groupby("source_feuille").agg({
+                    "duree_num": "sum",
+                    "type_travail": "count"
                 }).reset_index()
                 df_perf.columns = ["Agent", "Heures_Total", "Nombre_Taches"]
                 df_perf["Productivite"] = df_perf["Nombre_Taches"] / df_perf["Heures_Total"]
@@ -1946,19 +2872,23 @@ def page_gestion_agents():
         nom = st.text_input("Nom complet")
         poste = st.text_input("Poste")
         if st.form_submit_button("Ajouter l'agent") and nom.strip() and poste.strip():
-            st.session_state.agents.append({"Nom": nom.strip(), "Poste": poste.strip()})
+            db_manager.add_agent(nom.strip(), poste.strip())
             executer_sauvegarde_auto("update_rh", st.session_state.user_actif)
             st.toast("✅ Agent ajouté ! Tous les admins verront ce changement.", icon="👤")
             st.rerun()
 
-    if st.session_state.agents:
-        df = pd.DataFrame(st.session_state.agents)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    if agents_db:
+        df = pd.DataFrame(agents_db)
+        st.dataframe(df[["nom", "poste"]], use_container_width=True, hide_index=True)
         
         st.sidebar.markdown("---")
-        nom_suppr = st.sidebar.selectbox("Sélectionner l'agent", [a["Nom"] for a in st.session_state.agents])
+        # Sélectionner l'agent par nom
+        nom_suppr = st.sidebar.selectbox("Sélectionner l'agent", [a["nom"] for a in agents_db])
         if st.sidebar.button("Supprimer définitivement", type="primary"):
-            st.session_state.agents = [a for a in st.session_state.agents if a["Nom"] != nom_suppr]
+            # Récupérer l'id
+            agent_id = next((a["id"] for a in agents_db if a["nom"] == nom_suppr), None)
+            if agent_id:
+                db_manager.delete_agent(agent_id)
             executer_sauvegarde_auto("update_rh", st.session_state.user_actif)
             st.toast("🗑️ Agent supprimé ! Tous les admins verront ce changement.", icon="🗑️")
             st.rerun()
@@ -1972,9 +2902,13 @@ def page_planning():
         st.warning("🚫 Accès non autorisé.")
         return
     
-    if not st.session_state.agents:
+    agents_db = db_manager.get_all_agents()
+    if not agents_db:
         st.warning("Veuillez d'abord ajouter des agents dans la page 'Gestion du Personnel'.")
         return
+    
+    # Mettre à jour la session
+    st.session_state.agents = [{"Nom": a["nom"], "Poste": a["poste"], "id": a["id"]} for a in agents_db]
 
     col1, col2, col3, _ = st.columns([2, 2, 3, 3])
     with col1:
@@ -2012,12 +2946,14 @@ def page_planning():
             mapping_jours[nom_col] = j
 
     rows = []
-    for agent in st.session_state.agents:
-        nom_agent = agent["Nom"]
-        row = {"Agent": nom_agent, "Poste": agent["Poste"]}
+    for agent in agents_db:
+        nom_agent = agent["nom"]
+        agent_id = agent["id"]
+        row = {"Agent": nom_agent, "Poste": agent["poste"]}
         for nom_col in colonnes_semaine:
             date_cle = f"{annee_sel}-{mois_sel:02d}-{mapping_jours[nom_col]:02d}"
-            row[nom_col] = st.session_state.planning.get(date_cle, {}).get(nom_agent, "Travail")
+            planning_date = db_manager.get_planning_for_date(date_cle)
+            row[nom_col] = planning_date.get(agent_id, "Travail")
         rows.append(row)
 
     df_p = pd.DataFrame(rows)
@@ -2032,21 +2968,23 @@ def page_planning():
     st.markdown("### 📊 Récapitulatif Général des Statuts par Agent")
 
     recap_data = []
-    for agent in st.session_state.agents:
-        nom_agent = agent["Nom"]
+    for agent in agents_db:
+        nom_agent = agent["nom"]
+        agent_id = agent["id"]
         stats_compteur = {"Travail": 0, "OFF": 0, "Congé": 0, "Maladie": 0, "Formation": 0}
         jours_total = 0
         
         for nom_col in colonnes_semaine:
             date_cle = f"{annee_sel}-{mois_sel:02d}-{mapping_jours[nom_col]:02d}"
-            statut = st.session_state.planning.get(date_cle, {}).get(nom_agent, "Travail")
+            planning_date = db_manager.get_planning_for_date(date_cle)
+            statut = planning_date.get(agent_id, "Travail")
             if statut in stats_compteur:
                 stats_compteur[statut] += 1
             jours_total += 1
         
         recap_row = {
             "Agent": nom_agent,
-            "Poste": agent["Poste"],
+            "Poste": agent["poste"],
             "Travail": stats_compteur["Travail"],
             "OFF": stats_compteur["OFF"],
             "Congé": stats_compteur["Congé"],
@@ -2119,14 +3057,14 @@ def page_planning():
             delta=f"{totaux_statuts['Formation']/total_jours*100:.0f}%" if total_jours > 0 else "0%"
         )
 
-    st.caption(f"👥 {len(st.session_state.agents)} agents concernés sur {len(colonnes_semaine)} jours ouvrés")
+    st.caption(f"👥 {len(agents_db)} agents concernés sur {len(colonnes_semaine)} jours ouvrés")
 
     st.markdown("---")
     st.markdown("### ⚡ Modifier un statut pour cette semaine")
     
     col_a, col_j, col_s, col_btn = st.columns([3, 2, 3, 2])
     with col_a:
-        agent_choisi = st.selectbox("Agent", [a["Nom"] for a in st.session_state.agents], key="mod_ag")
+        agent_choisi = st.selectbox("Agent", [a["nom"] for a in agents_db], key="mod_ag")
     with col_j:
         jour_choisi = st.selectbox("Jour", [mapping_jours[c] for c in colonnes_semaine], format_func=lambda x: f"{x:02d}", key="mod_jr")
     with col_s:
@@ -2134,14 +3072,16 @@ def page_planning():
     with col_btn:
         st.write(""); st.write("")
         if st.button("Appliquer", type="primary", use_container_width=True, key="btn_apply_plan"):
+            # Récupérer l'agent_id
+            agent_id = next((a["id"] for a in agents_db if a["nom"] == agent_choisi), None)
             date_cle = f"{annee_sel}-{mois_sel:02d}-{jour_choisi:02d}"
-            if date_cle not in st.session_state.planning: st.session_state.planning[date_cle] = {}
-            st.session_state.planning[date_cle][agent_choisi] = statut_choisi
+            if agent_id:
+                db_manager.set_planning(date_cle, agent_id, statut_choisi)
             executer_sauvegarde_auto("update_planning", st.session_state.user_actif)
             st.toast("✅ Statut mis à jour ! Tous les admins verront ce changement.", icon="📋")
             st.rerun()
 
-# --- PAGE 3 : SUIVI DES HEURES ---
+# --- PAGE 3 : SUIVI DES HEURES (avec bouton de réinitialisation) ---
 def page_suivi_heures():
     check_inactivity()
     st.title("⏱️ Suivi des Heures de Production")
@@ -2150,16 +3090,25 @@ def page_suivi_heures():
         st.warning("🚫 Accès non autorisé.")
         return
     
-    if not st.session_state.agents:
+    agents_db = db_manager.get_all_agents()
+    if not agents_db:
         st.warning("Veuillez d'abord ajouter des agents dans la page 'Gestion du Personnel'.")
         return
 
+    # Mettre à jour la session
+    st.session_state.agents = [{"Nom": a["nom"], "Poste": a["poste"], "id": a["id"]} for a in agents_db]
+
+    # --- Définir mois_options en dehors des onglets pour qu'il soit accessible partout ---
+    mois_options = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+                    7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
+
+    # --- Sélection de l'année, du mois et de la semaine (commune à tous les onglets) ---
     col1, col2, col3, _ = st.columns([2, 2, 3, 3])
     with col1:
         annee_sel = st.selectbox("Année", [2026, 2027], index=0, key="hrs_yr")
     with col2:
-        mois_options = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
-        mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], index=datetime.now().month - 1, key="hrs_mo")
+        mois_sel = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x],
+                                index=datetime.now().month - 1, key="hrs_mo")
 
     cal = calendar.Calendar(firstweekday=0)
     semaines_du_mois = cal.monthdayscalendar(annee_sel, mois_sel)
@@ -2171,263 +3120,431 @@ def page_suivi_heures():
             options_semaines[idx] = f"Semaine {idx + 1} (Du {jours_valides[0]:02d} au {jours_valides[-1]:02d})"
             
     with col3:
-        semaine_idx = st.selectbox("Sélectionner la Semaine", list(options_semaines.keys()), format_func=lambda x: options_semaines[x], key="hrs_wk")
+        semaine_idx = st.selectbox("Sélectionner la Semaine", list(options_semaines.keys()),
+                                   format_func=lambda x: options_semaines[x], key="hrs_wk")
 
-    st.markdown("---")
-    
-    st.sidebar.header("📥 Import Pointage")
-    uploaded_file = st.sidebar.file_uploader("Importer le fichier pointeuse (.txt, .csv, .xlsx)", type=["txt", "csv", "xlsx"])
-    
-    if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith('.txt'):
-                df_pointage = pd.read_csv(uploaded_file, header=None, names=["Agent", "Timestamp"], sep="\t", engine='python')
-            elif uploaded_file.name.endswith('.csv'):
-                df_pointage = pd.read_csv(uploaded_file, header=None, names=["Agent", "Timestamp"], sep=None, engine='python')
-            else:
-                df_pointage = pd.read_excel(uploaded_file, header=None, names=["Agent", "Timestamp"])
-                
-            df_pointage["Agent"] = df_pointage["Agent"].astype(str).str.strip()
-            df_pointage["Timestamp"] = df_pointage["Timestamp"].astype(str).str.strip()
-            
-            df_pointage["Timestamp"] = pd.to_datetime(df_pointage["Timestamp"], dayfirst=True, errors='coerce')
-            df_pointage = df_pointage.dropna(subset=["Timestamp"])
-            df_pointage["Date"] = df_pointage["Timestamp"].dt.strftime("%Y-%m-%d")
-            
-            if st.sidebar.button("Calculer et injecter le pointage", type="primary", use_container_width=True):
-                compteur_updates = 0
-                grouped = df_pointage.groupby(["Date", "Agent"])
-                
-                for (date_cle, agent_nom), group in grouped:
-                    timestamps_tries = sorted(group["Timestamp"])
-                    nb_pointages = len(timestamps_tries)
-                    
-                    heures_calculées = 0.0
-                    heures_nuit_calculées = 0.0
-                    
-                    if nb_pointages >= 4:
-                        p1, p2, p3, p4 = timestamps_tries[:4]
-                        diff1 = (p2 - p1).total_seconds() / 3600.0
-                        diff2 = (p4 - p3).total_seconds() / 3600.0
-                        heures_calculées = round(max(0.0, diff1 + diff2), 2)
-                        heures_nuit_calculées = calculer_heures_nuit(p1, p2) + calculer_heures_nuit(p3, p4)
-                    elif nb_pointages >= 2:
-                        p1, p2 = timestamps_tries[0], timestamps_tries[-1]
-                        heures_calculées = round(max(0.0, (p2 - p1).total_seconds() / 3600.0), 2)
-                        heures_nuit_calculées = calculer_heures_nuit(p1, p2)
-                    
-                    if nb_pointages >= 2:
-                        if date_cle not in st.session_state.heures:
-                            st.session_state.heures[date_cle] = {}
-                        st.session_state.heures[date_cle][agent_nom] = {
-                            "total": heures_calculées,
-                            "nuit": heures_nuit_calculées
-                        }
-                        compteur_updates += 1
-                        
-                executer_sauvegarde_auto("import_pointeuse", st.session_state.user_actif)
-                st.sidebar.success(f"✔️ {compteur_updates} fiches journalières extraites !")
-                st.toast("📊 Pointage importé ! Tous les admins verront ces données.", icon="📊")
-                st.rerun()
-                
-        except Exception as e:
-            st.sidebar.error(f"Erreur d'analyse du fichier : {str(e)}")
-
-    st.sidebar.markdown("---")
-    
-    st.sidebar.header("📝 Pointage Manuel")
-    agent_h = st.sidebar.selectbox("Agent", [a["Nom"] for a in st.session_state.agents], key="input_hr_ag")
     semaine_choisie = semaines_du_mois[semaine_idx]
-    jours_dispos = [j for j in semaine_choisie if j != 0]
-    jour_h = st.sidebar.selectbox("Jour", jours_dispos, format_func=lambda x: f"{x:02d}", key="input_hr_jr")
-    
-    h_entree = st.sidebar.time_input("Heure d'entrée", value=datetime.strptime("08:00", "%H:%M").time())
-    h_deb_pause = st.sidebar.time_input("Début Pause (Optionnel)", value=datetime.strptime("12:00", "%H:%M").time())
-    h_fin_pause = st.sidebar.time_input("Fin Pause (Optionnel)", value=datetime.strptime("13:00", "%H:%M").time())
-    h_sortie = st.sidebar.time_input("Heure de sortie", value=datetime.strptime("17:00", "%H:%M").time())
-    
-    exclure_pause = st.sidebar.checkbox("Exclure la pause du calcul", value=True)
-    
-    if st.sidebar.button("Calculer et Enregistrer", use_container_width=True):
-        d_base = datetime(2026, 1, 1)
-        dt_e = datetime.combine(d_base, h_entree)
-        dt_s = datetime.combine(d_base, h_sortie)
-        
-        if dt_s <= dt_e:
-            dt_s += timedelta(days=1)
-            
-        total_brut = (dt_s - dt_e).total_seconds() / 3600.0
-        
-        dt_dp, dt_fp = None, None
-        duree_pause = 0.0
-        if exclure_pause:
-            dt_dp = datetime.combine(d_base, h_deb_pause)
-            dt_fp = datetime.combine(d_base, h_fin_pause)
-            if dt_dp < dt_e:
-                dt_dp += timedelta(days=1)
-            if dt_fp <= dt_dp:
-                dt_fp += timedelta(days=1)
-            duree_pause = (dt_fp - dt_dp).total_seconds() / 3600.0
-            
-        heures_finales = round(max(0.0, total_brut - duree_pause), 2)
-        heures_nuit_finales = calculer_heures_nuit(dt_e, dt_s, dt_dp, dt_fp)
-        
-        date_cle_h = f"{annee_sel}-{mois_sel:02d}-{jour_h:02d}"
-        if date_cle_h not in st.session_state.heures: 
-            st.session_state.heures[date_cle_h] = {}
-            
-        st.session_state.heures[date_cle_h][agent_h] = {
-            "total": heures_finales,
-            "nuit": heures_nuit_finales
-        }
-        
-        executer_sauvegarde_auto("pointage_manuel", st.session_state.user_actif)
-        st.toast("⏱️ Pointage manuel enregistré ! Tous les admins verront ces données.", icon="⏱️")
-        st.rerun()
-
-    st.markdown(f"### 📊 Récapitulatif global d'Heures — {options_semaines[semaine_idx]}")
-    
     noms_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     colonnes_semaine = [f"{noms_jours[i]} {j:02d}" for i, j in enumerate(semaine_choisie) if j != 0]
-
-    rows_heures = []
-    rows_dispatch_nuit = []
-    rows_weekend = []
     
-    for agent in st.session_state.agents:
-        nom_agent = agent["Nom"]
-        row = {"Agent": nom_agent, "Poste": agent["Poste"]}
-        row_nuit = {"Agent": nom_agent, "Poste": agent["Poste"]}
-        row_we = {"Agent": nom_agent, "Poste": agent["Poste"]}
+    # --- Création des onglets (4 onglets) ---
+    tabs = st.tabs(["📊 Récapitulatif Heures", "✏️ Pointage Manuel", "📋 Présences", "📅 Présence Mensuelle"])
+
+    # ---------- Onglet 1 : Récapitulatif Heures ----------
+    with tabs[0]:
+        st.markdown("---")
         
-        total_semaine = 0.0
-        nuit_semaine = 0.0
-        ecart_semaine = 0.0
-        samedi_semaine = 0.0
-        dimanche_semaine = 0.0
+        # Import pointage
+        st.sidebar.header("📥 Import Pointage")
+        uploaded_file = st.sidebar.file_uploader("Importer le fichier pointeuse (.txt, .csv, .xlsx)", type=["txt", "csv", "xlsx"])
         
-        for i, j in enumerate(semaine_choisie):
-            if j != 0:
-                nom_col = f"{noms_jours[i]} {j:02d}"
-                d_cle = f"{annee_sel}-{mois_sel:02d}-{j:02d}"
-                
-                donnee_brute = st.session_state.heures.get(d_cle, {}).get(nom_agent, 0.0)
-                if isinstance(donnee_brute, dict):
-                    hrs = donnee_brute.get("total", 0.0)
-                    hrs_nuit = donnee_brute.get("nuit", 0.0)
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.txt'):
+                    df_pointage = pd.read_csv(uploaded_file, header=None, names=["Agent", "Timestamp"], sep="\t", engine='python')
+                elif uploaded_file.name.endswith('.csv'):
+                    df_pointage = pd.read_csv(uploaded_file, header=None, names=["Agent", "Timestamp"], sep=None, engine='python')
                 else:
-                    hrs = float(donnee_brute)
-                    hrs_nuit = 0.0
+                    df_pointage = pd.read_excel(uploaded_file, header=None, names=["Agent", "Timestamp"])
                     
-                row[nom_col] = formater_en_duree(hrs)
-                row_nuit[nom_col] = formater_en_duree(hrs_nuit)
+                df_pointage["Agent"] = df_pointage["Agent"].astype(str).str.strip()
+                df_pointage["Timestamp"] = df_pointage["Timestamp"].astype(str).str.strip()
                 
-                total_semaine += hrs
-                nuit_semaine += hrs_nuit
-                if hrs > 0:
-                    ecart_semaine += (hrs - 8.0)
+                df_pointage["Timestamp"] = pd.to_datetime(df_pointage["Timestamp"], dayfirst=True, errors='coerce')
+                df_pointage = df_pointage.dropna(subset=["Timestamp"])
+                df_pointage["Date"] = df_pointage["Timestamp"].dt.strftime("%Y-%m-%d")
+                
+                if st.sidebar.button("Calculer et injecter le pointage", type="primary", use_container_width=True):
+                    compteur_updates = 0
+                    grouped = df_pointage.groupby(["Date", "Agent"])
                     
-                if noms_jours[i] == "Samedi":
-                    samedi_semaine += hrs
-                elif noms_jours[i] == "Dimanche":
-                    dimanche_semaine += hrs
+                    for (date_cle, agent_nom), group in grouped:
+                        timestamps_tries = sorted(group["Timestamp"])
+                        nb_pointages = len(timestamps_tries)
+                        
+                        heures_calculées = 0.0
+                        heures_nuit_calculées = 0.0
+                        
+                        if nb_pointages >= 4:
+                            p1, p2, p3, p4 = timestamps_tries[:4]
+                            diff1 = (p2 - p1).total_seconds() / 3600.0
+                            diff2 = (p4 - p3).total_seconds() / 3600.0
+                            heures_calculées = round(max(0.0, diff1 + diff2), 2)
+                            heures_nuit_calculées = calculer_heures_nuit(p1, p2) + calculer_heures_nuit(p3, p4)
+                        elif nb_pointages >= 2:
+                            p1, p2 = timestamps_tries[0], timestamps_tries[-1]
+                            heures_calculées = round(max(0.0, (p2 - p1).total_seconds() / 3600.0), 2)
+                            heures_nuit_calculées = calculer_heures_nuit(p1, p2)
+                        
+                        if nb_pointages >= 2:
+                            agent_id = next((a["id"] for a in agents_db if a["nom"] == agent_nom), None)
+                            if agent_id:
+                                db_manager.set_heures(date_cle, agent_id, heures_calculées, heures_nuit_calculées)
+                                # Enregistrer les pointages bruts dans la table pointages (optionnel)
+                                for ts in timestamps_tries:
+                                    db_manager.add_pointage(date_cle, agent_id, "pointage", ts.isoformat())
+                                compteur_updates += 1
+                                
+                    executer_sauvegarde_auto("import_pointeuse", st.session_state.user_actif)
+                    st.sidebar.success(f"✔️ {compteur_updates} fiches journalières extraites !")
+                    st.toast("📊 Pointage importé ! Tous les admins verront ces données.", icon="📊")
+                    st.rerun()
+                    
+            except Exception as e:
+                st.sidebar.error(f"Erreur d'analyse du fichier : {str(e)}")
+
+        st.markdown(f"### 📊 Récapitulatif global d'Heures — {options_semaines[semaine_idx]}")
         
-        row["Total Semaine"] = formater_en_duree(total_semaine)
-        row["Écart Semaine"] = formater_en_ecart(ecart_semaine)
-        row_nuit["Total Nuit Semaine"] = formater_en_duree(nuit_semaine)
+        rows_heures = []
+        rows_dispatch_nuit = []
+        rows_weekend = []
         
-        row_we["Samedi (Semaine)"] = formater_en_duree(samedi_semaine)
-        row_we["Dimanche (Semaine)"] = formater_en_duree(dimanche_semaine)
-        row_we["Total WE Semaine"] = formater_en_duree(samedi_semaine + dimanche_semaine)
-        
-        total_mois = 0.0
-        nuit_mois = 0.0
-        ecart_mois = 0.0
-        samedi_mois = 0.0
-        dimanche_mois = 0.0
-        
-        _, max_jours_mois = calendar.monthrange(annee_sel, mois_sel)
-        for j_mois in range(1, max_jours_mois + 1):
-            d_cle_mois = f"{annee_sel}-{mois_sel:02d}-{j_mois:02d}"
-            donnee_mois = st.session_state.heures.get(d_cle_mois, {}).get(nom_agent, 0.0)
-            if isinstance(donnee_mois, dict):
+        for agent in agents_db:
+            nom_agent = agent["nom"]
+            agent_id = agent["id"]
+            row = {"Agent": nom_agent, "Poste": agent["poste"]}
+            row_nuit = {"Agent": nom_agent, "Poste": agent["poste"]}
+            row_we = {"Agent": nom_agent, "Poste": agent["poste"]}
+            
+            total_semaine = 0.0
+            nuit_semaine = 0.0
+            ecart_semaine = 0.0
+            samedi_semaine = 0.0
+            dimanche_semaine = 0.0
+            
+            for i, j in enumerate(semaine_choisie):
+                if j != 0:
+                    nom_col = f"{noms_jours[i]} {j:02d}"
+                    d_cle = f"{annee_sel}-{mois_sel:02d}-{j:02d}"
+                    
+                    heures_date = db_manager.get_heures_for_date(d_cle)
+                    donnee = heures_date.get(agent_id, {})
+                    hrs = donnee.get("total", 0.0)
+                    hrs_nuit = donnee.get("nuit", 0.0)
+                        
+                    row[nom_col] = formater_en_duree(hrs)
+                    row_nuit[nom_col] = formater_en_duree(hrs_nuit)
+                    
+                    total_semaine += hrs
+                    nuit_semaine += hrs_nuit
+                    if hrs > 0:
+                        ecart_semaine += (hrs - 8.0)
+                        
+                    if noms_jours[i] == "Samedi":
+                        samedi_semaine += hrs
+                    elif noms_jours[i] == "Dimanche":
+                        dimanche_semaine += hrs
+            
+            row["Total Semaine"] = formater_en_duree(total_semaine)
+            row["Écart Semaine"] = formater_en_ecart(ecart_semaine)
+            row_nuit["Total Nuit Semaine"] = formater_en_duree(nuit_semaine)
+            
+            row_we["Samedi (Semaine)"] = formater_en_duree(samedi_semaine)
+            row_we["Dimanche (Semaine)"] = formater_en_duree(dimanche_semaine)
+            row_we["Total WE Semaine"] = formater_en_duree(samedi_semaine + dimanche_semaine)
+            
+            total_mois = 0.0
+            nuit_mois = 0.0
+            ecart_mois = 0.0
+            samedi_mois = 0.0
+            dimanche_mois = 0.0
+            
+            _, max_jours_mois = calendar.monthrange(annee_sel, mois_sel)
+            for j_mois in range(1, max_jours_mois + 1):
+                d_cle_mois = f"{annee_sel}-{mois_sel:02d}-{j_mois:02d}"
+                heures_mois = db_manager.get_heures_for_date(d_cle_mois)
+                donnee_mois = heures_mois.get(agent_id, {})
                 hrs_m = donnee_mois.get("total", 0.0)
                 hrs_n_m = donnee_mois.get("nuit", 0.0)
-            else:
-                hrs_m = float(donnee_mois)
-                hrs_n_m = 0.0
+                    
+                total_mois += hrs_m
+                nuit_mois += hrs_n_m
+                if hrs_m > 0:
+                    ecart_mois += (hrs_m - 8.0)
+                    
+                dt_obj = datetime(annee_sel, mois_sel, j_mois)
+                if dt_obj.weekday() == 5:
+                    samedi_mois += hrs_m
+                elif dt_obj.weekday() == 6:
+                    dimanche_mois += hrs_m
                 
-            total_mois += hrs_m
-            nuit_mois += hrs_n_m
-            if hrs_m > 0:
-                ecart_mois += (hrs_m - 8.0)
-                
-            dt_obj = datetime(annee_sel, mois_sel, j_mois)
-            if dt_obj.weekday() == 5:
-                samedi_mois += hrs_m
-            elif dt_obj.weekday() == 6:
-                dimanche_mois += hrs_m
+            row["Total Mois"] = formater_en_duree(total_mois)
+            row["Écart Mois"] = formater_en_ecart(ecart_mois)
+            row_nuit["Total Nuit Mois"] = formater_en_duree(nuit_mois)
             
-        row["Total Mois"] = formater_en_duree(total_mois)
-        row["Écart Mois"] = formater_en_ecart(ecart_mois)
-        row_nuit["Total Nuit Mois"] = formater_en_duree(nuit_mois)
-        
-        row_we["Samedi (Mois)"] = formater_en_duree(samedi_mois)
-        row_we["Dimanche (Mois)"] = formater_en_duree(dimanche_mois)
-        row_we["Total WE Mois"] = formater_en_duree(samedi_mois + dimanche_mois)
-        
-        rows_heures.append(row)
-        rows_dispatch_nuit.append(row_nuit)
-        rows_weekend.append(row_we)
+            row_we["Samedi (Mois)"] = formater_en_duree(samedi_mois)
+            row_we["Dimanche (Mois)"] = formater_en_duree(dimanche_mois)
+            row_we["Total WE Mois"] = formater_en_duree(samedi_mois + dimanche_mois)
+            
+            rows_heures.append(row)
+            rows_dispatch_nuit.append(row_nuit)
+            rows_weekend.append(row_we)
 
-    df_heures = pd.DataFrame(rows_heures)
-    style_df = df_heures.style.map(appliquer_couleur_jours_suivi_brut, subset=colonnes_semaine)
-    style_df = style_df.map(appliquer_couleur_totaux_ecart, subset=["Écart Semaine", "Écart Mois"])
-    st.dataframe(style_df, use_container_width=True, hide_index=True)
+        df_heures = pd.DataFrame(rows_heures)
+        style_df = df_heures.style.map(appliquer_couleur_jours_suivi_brut, subset=colonnes_semaine)
+        style_df = style_df.map(appliquer_couleur_totaux_ecart, subset=["Écart Semaine", "Écart Mois"])
+        st.dataframe(style_df, use_container_width=True, hide_index=True)
 
-    st.markdown("---")
-    st.markdown("### 🌙 Dispatching & Ventilation des Heures de Nuit (19:00:00 à 05:00:00)")
-    df_nuit = pd.DataFrame(rows_dispatch_nuit)
-    style_nuit = df_nuit.style.map(appliquer_style_nuit, subset=colonnes_semaine)
-    st.dataframe(style_nuit, use_container_width=True, hide_index=True)
+        st.markdown("---")
+        st.markdown("### 🌙 Dispatching & Ventilation des Heures de Nuit (19:00:00 à 05:00:00)")
+        df_nuit = pd.DataFrame(rows_dispatch_nuit)
+        style_nuit = df_nuit.style.map(appliquer_style_nuit, subset=colonnes_semaine)
+        st.dataframe(style_nuit, use_container_width=True, hide_index=True)
 
-    st.markdown("---")
-    st.markdown("### 🏖️ Heures Week-end")
-    df_weekend = pd.DataFrame(rows_weekend)
-    
-    def style_col_dimanche_uniquement(col):
-        if "Dimanche" in col.name:
-            return ["background-color: #1A237E; color: white; font-weight: bold; text-align: center;"] * len(col)
-        return ["text-align: center;"] * len(col)
+        st.markdown("---")
+        st.markdown("### 🏖️ Heures Week-end")
+        df_weekend = pd.DataFrame(rows_weekend)
         
-    style_we = df_weekend.style.apply(style_col_dimanche_uniquement, axis=0)
-    st.dataframe(style_we, use_container_width=True, hide_index=True)
+        def style_col_dimanche_uniquement(col):
+            if "Dimanche" in col.name:
+                return ["background-color: #1A237E; color: white; font-weight: bold; text-align: center;"] * len(col)
+            return ["text-align: center;"] * len(col)
+            
+        style_we = df_weekend.style.apply(style_col_dimanche_uniquement, axis=0)
+        st.dataframe(style_we, use_container_width=True, hide_index=True)
 
-    st.markdown("---")
-    st.markdown("### 📅 Calendrier Officiel des Jours Fériés (Madagascar)")
-    
-    jours_feries_data = [
-        {"Date": "01 Janvier", "Désignation": "Nouvel An"},
-        {"Date": "29 Mars", "Désignation": "Commémoration des Événements de 1947"},
-        {"Date": "06 Avril", "Désignation": "Lundi de Pâques"},
-        {"Date": "01 Mai", "Désignation": "Fête du Travail"},
-        {"Date": "14 Mai", "Désignation": "Ascension"},
-        {"Date": "25 Mai", "Désignation": "Lundi de Pentecôte"},
-        {"Date": "26 Juin", "Désignation": "Fête Nationale / Fête de l'Indépendance"},
-        {"Date": "15 Août", "Désignation": "Assomption"},
-        {"Date": "01 Novembre", "Désignation": "Toussaint"},
-        {"Date": "25 Décembre", "Désignation": "Noël"}
-    ]
-    
-    df_feries = pd.DataFrame(jours_feries_data)
-    col_calendar, col_metric = st.columns([8, 4])
-    
-    with col_calendar:
-        st.dataframe(df_feries, use_container_width=True, hide_index=True)
+        st.markdown("---")
+        st.markdown("### 📅 Calendrier Officiel des Jours Fériés (Madagascar)")
         
-    with col_metric:
-        st.metric(label="Total Jours Fériés Annuels", value=f"{len(jours_feries_data)} Jours")
-        st.info("💡 Note : Les heures travaillées durant ces jours feront l'objet d'une majoration réglementaire sur les grilles de paie.")
+        jours_feries_data = [
+            {"Date": "01 Janvier", "Désignation": "Nouvel An"},
+            {"Date": "29 Mars", "Désignation": "Commémoration des Événements de 1947"},
+            {"Date": "06 Avril", "Désignation": "Lundi de Pâques"},
+            {"Date": "01 Mai", "Désignation": "Fête du Travail"},
+            {"Date": "14 Mai", "Désignation": "Ascension"},
+            {"Date": "25 Mai", "Désignation": "Lundi de Pentecôte"},
+            {"Date": "26 Juin", "Désignation": "Fête Nationale / Fête de l'Indépendance"},
+            {"Date": "15 Août", "Désignation": "Assomption"},
+            {"Date": "01 Novembre", "Désignation": "Toussaint"},
+            {"Date": "25 Décembre", "Désignation": "Noël"}
+        ]
+        
+        df_feries = pd.DataFrame(jours_feries_data)
+        col_calendar, col_metric = st.columns([8, 4])
+        
+        with col_calendar:
+            st.dataframe(df_feries, use_container_width=True, hide_index=True)
+            
+        with col_metric:
+            st.metric(label="Total Jours Fériés Annuels", value=f"{len(jours_feries_data)} Jours")
+            st.info("💡 Note : Les heures travaillées durant ces jours feront l'objet d'une majoration réglementaire sur les grilles de paie.")
+
+        # --- Bouton de réinitialisation des données de suivi des heures ---
+        st.markdown("---")
+        st.warning("⚠️ La réinitialisation supprime toutes les données de suivi des heures (table `heures` et `pointages`). Cette action est irréversible.")
+        if st.checkbox("Confirmer la réinitialisation des données de suivi des heures", key="reset_heures_confirm"):
+            if st.button("🗑️ Réinitialiser les données de suivi des heures", type="primary", use_container_width=True):
+                # Sauvegarde automatique avant la suppression
+                executer_sauvegarde_auto("reset_heures", st.session_state.user_actif)
+                # Supprimer les données des tables heures et pointages
+                conn = db_manager.get_db()
+                c = conn.cursor()
+                c.execute("DELETE FROM heures")
+                c.execute("DELETE FROM pointages")
+                conn.commit()
+                conn.close()
+                st.toast("✅ Données de suivi des heures réinitialisées avec succès !", icon="🗑️")
+                time.sleep(0.5)
+                st.rerun()
+
+    # ---------- Onglet 2 : Pointage Manuel (multi-plages) ----------
+    with tabs[1]:
+        st.markdown("### ✏️ Saisie manuelle des pointages (multi‑plages)")
+        st.info("Ajoutez une ou plusieurs plages horaires pour un agent et une date. Les heures s'ajouteront à celles déjà existantes.")
+        
+        col_agent_date = st.columns(2)
+        with col_agent_date[0]:
+            # Clé unique pour éviter les conflits
+            agent_manuel = st.selectbox("Agent", [a["nom"] for a in agents_db], key="manuel_agent_select")
+        with col_agent_date[1]:
+            date_manuel = st.date_input("Date", value=datetime.now().date(), key="manuel_date")
+        
+        # Gestion des plages dynamiques
+        if "plages_pointage" not in st.session_state:
+            st.session_state.plages_pointage = [{"entree": "08:00", "debut_pause": "12:00", "fin_pause": "13:00", "sortie": "17:00"}]
+        
+        # Afficher les plages
+        for i, plage in enumerate(st.session_state.plages_pointage):
+            with st.container():
+                col1, col2, col3, col4, col5 = st.columns([2,2,2,2,1])
+                with col1:
+                    plage["entree"] = st.text_input(f"Entrée {i+1}", value=plage["entree"], key=f"entree_{i}")
+                with col2:
+                    plage["debut_pause"] = st.text_input(f"Début pause {i+1}", value=plage["debut_pause"], key=f"deb_pause_{i}")
+                with col3:
+                    plage["fin_pause"] = st.text_input(f"Fin pause {i+1}", value=plage["fin_pause"], key=f"fin_pause_{i}")
+                with col4:
+                    plage["sortie"] = st.text_input(f"Sortie {i+1}", value=plage["sortie"], key=f"sortie_{i}")
+                with col5:
+                    if st.button("🗑️ Supprimer", key=f"del_plage_{i}"):
+                        st.session_state.plages_pointage.pop(i)
+                        st.rerun()
+        
+        if st.button("➕ Ajouter une plage"):
+            st.session_state.plages_pointage.append({"entree": "08:00", "debut_pause": "12:00", "fin_pause": "13:00", "sortie": "17:00"})
+            st.rerun()
+        
+        if st.button("💾 Enregistrer les pointages", type="primary", use_container_width=True):
+            date_str = date_manuel.strftime("%Y-%m-%d")
+            agent_id = next((a["id"] for a in agents_db if a["nom"] == agent_manuel), None)
+            if agent_id is None:
+                st.error("Agent non trouvé.")
+            else:
+                total_heures_jour = 0.0
+                total_nuit_jour = 0.0
+                for idx, plage in enumerate(st.session_state.plages_pointage):
+                    try:
+                        entree = datetime.strptime(plage["entree"], "%H:%M")
+                        debut_pause = datetime.strptime(plage["debut_pause"], "%H:%M")
+                        fin_pause = datetime.strptime(plage["fin_pause"], "%H:%M")
+                        sortie = datetime.strptime(plage["sortie"], "%H:%M")
+                    except:
+                        st.error(f"Format d'heure invalide dans la plage {idx+1}. Utilisez HH:MM.")
+                        st.stop()
+                    dt_entree = datetime.combine(date_manuel, entree.time())
+                    dt_debut_pause = datetime.combine(date_manuel, debut_pause.time())
+                    dt_fin_pause = datetime.combine(date_manuel, fin_pause.time())
+                    dt_sortie = datetime.combine(date_manuel, sortie.time())
+                    # Insérer les événements
+                    db_manager.add_pointage(date_str, agent_id, "entree", dt_entree.isoformat())
+                    db_manager.add_pointage(date_str, agent_id, "debut_pause", dt_debut_pause.isoformat())
+                    db_manager.add_pointage(date_str, agent_id, "fin_pause", dt_fin_pause.isoformat())
+                    db_manager.add_pointage(date_str, agent_id, "sortie", dt_sortie.isoformat())
+                    # Calcul des heures
+                    travail1 = (dt_debut_pause - dt_entree).total_seconds() / 3600.0
+                    travail2 = (dt_sortie - dt_fin_pause).total_seconds() / 3600.0
+                    total_plage = max(0.0, travail1 + travail2)
+                    total_heures_jour += total_plage
+                    nuit_plage = calculer_heures_nuit(dt_entree, dt_sortie, dt_debut_pause, dt_fin_pause)
+                    total_nuit_jour += nuit_plage
+                # Enregistrer les totaux (addition)
+                db_manager.set_heures(date_str, agent_id, total_heures_jour, total_nuit_jour)
+                executer_sauvegarde_auto("pointage_manuel", st.session_state.user_actif)
+                st.toast(f"✅ Pointage enregistré pour {agent_manuel} le {date_str} (Total: {formater_en_duree(total_heures_jour)})", icon="⏱️")
+                st.rerun()
+
+    # ---------- Onglet 3 : Présences ----------
+    with tabs[2]:
+        st.markdown("### 📋 Présences par Agent")
+        col_date_presence = st.columns([2,1])
+        with col_date_presence[0]:
+            date_presence = st.date_input("Choisir une date", value=datetime.now().date(), key="presence_date")
+        if st.button("Afficher les présences", use_container_width=True):
+            date_str = date_presence.strftime("%Y-%m-%d")
+            pointages = db_manager.get_pointages_by_date(date_str)
+            if not pointages:
+                st.info("📋 Aucun pointage pour cette date.")
+            else:
+                agent_ids = set(p["agent_id"] for p in pointages)
+                for agent_id in agent_ids:
+                    agent_nom = next((a["nom"] for a in agents_db if a["id"] == agent_id), "Inconnu")
+                    events = [p for p in pointages if p["agent_id"] == agent_id]
+                    events_sorted = sorted(events, key=lambda x: x["timestamp"])
+                    data = []
+                    for evt in events_sorted:
+                        dt = datetime.fromisoformat(evt["timestamp"])
+                        data.append({"Type": evt["type"], "Heure": dt.strftime("%H:%M:%S")})
+                    df_pres = pd.DataFrame(data)
+                    st.subheader(f"👤 {agent_nom}")
+                    st.dataframe(df_pres, use_container_width=True, hide_index=True)
+
+    # ---------- Onglet 4 : Présence Mensuelle ----------
+    with tabs[3]:
+        st.markdown("### 📅 Présence Mensuelle par Agent")
+        
+        col_mois, col_agent = st.columns(2)
+        with col_mois:
+            annee_pres = st.selectbox("Année", [2026, 2027], index=0, key="pres_annee")
+            mois_pres = st.selectbox("Mois", list(mois_options.keys()), format_func=lambda x: mois_options[x], 
+                                     index=datetime.now().month - 1, key="pres_mois")
+        with col_agent:
+            agent_pres = st.selectbox("Agent", [a["nom"] for a in agents_db], key="pres_agent")
+        
+        agent_id_pres = next((a["id"] for a in agents_db if a["nom"] == agent_pres), None)
+        if agent_id_pres is None:
+            st.error("Agent introuvable.")
+            st.stop()
+            
+        # Générer les jours du mois
+        jours_mois = []
+        noms_jours = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+        
+        _, max_jours = calendar.monthrange(annee_pres, mois_pres)
+        for j in range(1, max_jours + 1):
+            date_cle = f"{annee_pres}-{mois_pres:02d}-{j:02d}"
+            dt_obj = datetime(annee_pres, mois_pres, j)
+            
+            # 1. Récupérer les pointages pour trouver entrée / sortie
+            pointages = db_manager.get_pointages_by_date(date_cle)
+            events_agent = [p for p in pointages if p["agent_id"] == agent_id_pres]
+            events_sorted = sorted(events_agent, key=lambda x: x["timestamp"])
+            
+            entree = ""
+            sortie = ""
+            if events_sorted:
+                debut = datetime.fromisoformat(events_sorted[0]["timestamp"])
+                fin = datetime.fromisoformat(events_sorted[-1]["timestamp"])
+                entree = debut.strftime("%H:%M")
+                sortie = fin.strftime("%H:%M")
+            
+            # 2. Récupérer le statut (Travail, OFF, Congé, etc.)
+            planning_date = db_manager.get_planning_for_date(date_cle)
+            statut = planning_date.get(agent_id_pres, "")
+            
+            # 3. Récupérer les heures calculées
+            heures_date = db_manager.get_heures_for_date(date_cle)
+            donnee_heures = heures_date.get(agent_id_pres, {})
+            hrs_total = donnee_heures.get("total", 0.0)
+            hrs_nuit = donnee_heures.get("nuit", 0.0)
+            
+            jours_mois.append({
+                "Jour": noms_jours[dt_obj.weekday()],
+                "Date": f"{j:02d}/{mois_pres:02d}/{annee_pres}",
+                "HD": entree,
+                "HF": sortie,
+                "Statut": statut if statut else "Non défini",
+                "HT Jour": formater_en_duree(hrs_total),
+                "HT Nuit": formater_en_duree(hrs_nuit)
+            })
+            
+        df_presence = pd.DataFrame(jours_mois)
+        
+        if df_presence.empty:
+            st.info("Aucune donnée pour ce mois.")
+        else:
+            # Appliquer le style vert/bleu/rouge selon les heures travaillées comme dans l'image
+            def style_presence(row):
+                styles = [""] * len(row)
+                try:
+                    val = convertir_temps_en_heures(row["HT Jour"])
+                    if val >= 7.5:
+                        styles[df_presence.columns.get_loc("HT Jour")] = "background-color: #2E7D32; color: white; font-weight: bold; text-align: center;"
+                    elif val >= 7.0:
+                        styles[df_presence.columns.get_loc("HT Jour")] = "background-color: #1565C0; color: white; font-weight: bold; text-align: center;"
+                    elif val >= 6.5:
+                        styles[df_presence.columns.get_loc("HT Jour")] = "background-color: #FBC02D; color: black; font-weight: bold; text-align: center;"
+                    elif val > 0:
+                        styles[df_presence.columns.get_loc("HT Jour")] = "background-color: #C62828; color: white; font-weight: bold; text-align: center;"
+                except:
+                    pass
+                return styles
+
+            st.dataframe(
+                df_presence.style.apply(style_presence, axis=1),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Métriques du mois
+            total_heures_mois = sum([convertir_temps_en_heures(r["HT Jour"]) for _, r in df_presence.iterrows()])
+            total_nuit_mois = sum([convertir_temps_en_heures(r["HT Nuit"]) for _, r in df_presence.iterrows()])
+            jours_travail = sum([1 for _, r in df_presence.iterrows() if convertir_temps_en_heures(r["HT Jour"]) > 0])
+            
+            st.markdown("---")
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("📅 Jours Travaillés", jours_travail)
+            col_m2.metric("⏱️ Total Heures Mois", formater_en_duree(total_heures_mois))
+            col_m3.metric("🌙 Total Heures Nuit", formater_en_duree(total_nuit_mois))
 
 # --- PAGE 4 : SYNCHRONISATION CLOUD ---
 def page_synchronisation_cloud():
@@ -2459,11 +3576,12 @@ def page_synchronisation_cloud():
                 
                 # Récupérer les données existantes pour détection des doublons
                 donnees_existantes = []
-                if only_new and st.session_state.get("donnees_cloud_centralisees"):
-                    df_existant = pd.DataFrame(st.session_state["donnees_cloud_centralisees"])
-                    if not df_existant.empty:
+                if only_new:
+                    cloud_data_exist = db_manager.get_all_cloud_data()
+                    if cloud_data_exist:
+                        df_existant = pd.DataFrame(cloud_data_exist)
                         donnees_existantes = df_existant.apply(
-                            lambda row: f"{row.get('Date', '')}_{row.get('Source_Feuille', '')}_{row.get('Type_Travail', '')}_{row.get('Statut', '')}_{row.get('Duree_Total', '')}", 
+                            lambda row: f"{row.get('date', '')}_{row.get('source_feuille', '')}_{row.get('type_travail', '')}_{row.get('statut', '')}_{row.get('duree_total', '')}", 
                             axis=1
                         ).tolist()
                 
@@ -2525,13 +3643,12 @@ def page_synchronisation_cloud():
                 
                 df_global["Duree_Num"] = df_global["Duree_Total"].apply(convertir_temps_en_heures)
 
-                if only_new and st.session_state.get("donnees_cloud_centralisees"):
-                    df_existant = pd.DataFrame(st.session_state["donnees_cloud_centralisees"])
-                    df_final = pd.concat([df_existant, df_global], ignore_index=True)
-                    df_final = df_final.drop_duplicates(subset=["Date", "Source_Feuille", "Type_Travail", "Statut", "Duree_Total"])
-                    st.session_state["donnees_cloud_centralisees"] = df_final.to_dict(orient="records")
-                else:
-                    st.session_state["donnees_cloud_centralisees"] = df_global.to_dict(orient="records")
+                # Insérer en DB
+                for _, row in df_global.iterrows():
+                    db_manager.add_cloud_data(row.to_dict())
+                
+                # Mettre à jour la session cache
+                st.session_state["donnees_cloud_centralisees"] = db_manager.get_all_cloud_data()
                 
                 executer_sauvegarde_auto("import_multi_sheets", st.session_state.user_actif)
                 return True, nouvelles_lignes
@@ -2551,6 +3668,8 @@ def page_synchronisation_cloud():
     
     with col_btn1:
         if st.button("🔄 Synchronisation Complète", type="primary", use_container_width=True):
+            # Vider la table cloud_data avant réimport
+            db_manager.clear_cloud_data()
             success, nb_lignes = importer_donnees_cloud(only_new=False)
             if success:
                 st.success(f"✔️ Synchronisation complète réussie : {nb_lignes} lignes de production agrégées et mémorisées !")
@@ -2570,6 +3689,7 @@ def page_synchronisation_cloud():
     
     with col_btn3:
         if st.button("🗑️ Vider le Cache Cloud", type="secondary", use_container_width=True):
+            db_manager.clear_cloud_data()
             st.session_state["donnees_cloud_centralisees"] = []
             executer_sauvegarde_auto("clear_cloud_cache", st.session_state.user_actif)
             st.success("✔️ Cache cloud vidé avec succès !")
@@ -2580,24 +3700,25 @@ def page_synchronisation_cloud():
     st.markdown("---")
     st.markdown("### 📊 Statut de la Synchronisation")
     
-    nb_lignes_actuelles = len(st.session_state.get("donnees_cloud_centralisees", []))
+    cloud_data = db_manager.get_all_cloud_data()
+    nb_lignes_actuelles = len(cloud_data)
     
     col_status1, col_status2, col_status3 = st.columns(3)
     col_status1.metric("📊 Lignes en Cache", nb_lignes_actuelles)
     col_status2.metric("📁 Feuilles Connectées", "5")
-    col_status3.metric("🔄 Dernière Synchro", "Partagée" if st.session_state.get("donnees_cloud_centralisees") else "Jamais")
+    col_status3.metric("🔄 Dernière Synchro", "Partagée" if cloud_data else "Jamais")
 
     # --- AFFICHAGE DES DONNÉES EXISTANTES ---
-    if st.session_state["donnees_cloud_centralisees"]:
-        df_affichage = pd.DataFrame(st.session_state["donnees_cloud_centralisees"])
+    if cloud_data:
+        df_affichage = pd.DataFrame(cloud_data)
         
-        if "Date_Parsed" in df_affichage.columns:
-            df_affichage["Date_Parsed"] = pd.to_datetime(df_affichage["Date_Parsed"])
+        if "date_parsed" in df_affichage.columns:
+            df_affichage["date_parsed"] = pd.to_datetime(df_affichage["date_parsed"])
             
             if date_debut is not None:
-                df_affichage = df_affichage[df_affichage["Date_Parsed"].dt.date >= date_debut]
+                df_affichage = df_affichage[df_affichage["date_parsed"].dt.date >= date_debut]
             if date_fin is not None:
-                df_affichage = df_affichage[df_affichage["Date_Parsed"].dt.date <= date_fin]
+                df_affichage = df_affichage[df_affichage["date_parsed"].dt.date <= date_fin]
 
         st.markdown("---")
         st.markdown("### 🎛️ Filtres de Sélection Multi-Feuilles")
@@ -2606,12 +3727,12 @@ def page_synchronisation_cloud():
         feuille_selectionnee = st.selectbox("Sélectionner la feuille / collaborateur à isoler", options_feuilles, index=0)
         
         if feuille_selectionnee != "Tout Afficher":
-            df_affichage = df_affichage[df_affichage["Source_Feuille"] == feuille_selectionnee]
+            df_affichage = df_affichage[df_affichage["source_feuille"] == feuille_selectionnee]
 
         st.markdown("### 📊 Indicateurs Clés de Production")
         col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
-        col_kpi1.metric("Temps Moyen par Traitement", formater_en_duree(df_affichage["Duree_Num"].mean() if not df_affichage.empty else 0))
-        col_kpi2.metric("Volume Total d'Heures", formater_en_duree(df_affichage["Duree_Num"].sum() if not df_affichage.empty else 0))
+        col_kpi1.metric("Temps Moyen par Traitement", formater_en_duree(df_affichage["duree_num"].mean() if not df_affichage.empty else 0))
+        col_kpi2.metric("Volume Total d'Heures", formater_en_duree(df_affichage["duree_num"].sum() if not df_affichage.empty else 0))
         col_kpi3.metric("Nombre total de Tâches", f"{len(df_affichage)} Actions")
 
         st.markdown("#### ⏱️ Cumul des Heures de Production")
@@ -2619,41 +3740,41 @@ def page_synchronisation_cloud():
         
         with tab_jour:
             if not df_affichage.empty:
-                df_jour = df_affichage.groupby("Jour")["Duree_Num"].sum().reset_index()
-                df_jour["Heures_Formatees"] = df_jour["Duree_Num"].apply(formater_en_duree)
-                st.dataframe(df_jour[["Jour", "Heures_Formatees"]], use_container_width=True, hide_index=True)
+                df_jour = df_affichage.groupby("jour")["duree_num"].sum().reset_index()
+                df_jour["Heures_Formatees"] = df_jour["duree_num"].apply(formater_en_duree)
+                st.dataframe(df_jour[["jour", "Heures_Formatees"]], use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune donnée enregistrée.")
                 
         with tab_semaine:
             if not df_affichage.empty:
-                df_sem = df_affichage.groupby("Semaine")["Duree_Num"].sum().reset_index()
-                df_sem["Heures_Formatees"] = df_sem["Duree_Num"].apply(formater_en_duree)
-                st.dataframe(df_sem[["Semaine", "Heures_Formatees"]], use_container_width=True, hide_index=True)
+                df_sem = df_affichage.groupby("semaine")["duree_num"].sum().reset_index()
+                df_sem["Heures_Formatees"] = df_sem["duree_num"].apply(formater_en_duree)
+                st.dataframe(df_sem[["semaine", "Heures_Formatees"]], use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune donnée enregistrée.")
                 
         with tab_mois:
             if not df_affichage.empty:
-                df_m = df_affichage.groupby("Mois")["Duree_Num"].sum().reset_index()
-                df_m["Heures_Formatees"] = df_m["Duree_Num"].apply(formater_en_duree)
-                st.dataframe(df_m[["Mois", "Heures_Formatees"]], use_container_width=True, hide_index=True)
+                df_m = df_affichage.groupby("mois")["duree_num"].sum().reset_index()
+                df_m["Heures_Formatees"] = df_m["duree_num"].apply(formater_en_duree)
+                st.dataframe(df_m[["mois", "Heures_Formatees"]], use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune donnée enregistrée.")
 
         st.markdown("#### 🗂️ Analyse par Catégories (Type de travail)")
         if not df_affichage.empty:
-            df_cat = df_affichage.groupby("Type_Travail").agg(
-                Nombre_de_Taches=("Type_Travail", "count"),
-                Duree_Totale_Heures=("Duree_Num", "sum"),
-                Temps_Moyen_Heures=("Duree_Num", "mean")
+            df_cat = df_affichage.groupby("type_travail").agg(
+                Nombre_de_Taches=("type_travail", "count"),
+                Duree_Totale_Heures=("duree_num", "sum"),
+                Temps_Moyen_Heures=("duree_num", "mean")
             ).reset_index()
             
             df_cat["Durée Totale"] = df_cat["Duree_Totale_Heures"].apply(formater_en_duree)
             df_cat["Temps Moyen"] = df_cat["Temps_Moyen_Heures"].apply(formater_en_duree)
             
             st.dataframe(
-                df_cat[["Type_Travail", "Nombre_de_Taches", "Durée Totale", "Temps Moyen"]],
+                df_cat[["type_travail", "Nombre_de_Taches", "Durée Totale", "Temps Moyen"]],
                 use_container_width=True, hide_index=True
             )
         else:
@@ -2661,9 +3782,9 @@ def page_synchronisation_cloud():
 
         st.markdown("#### 📋 Registre Général & Remarques")
         if not df_affichage.empty:
-            df_registre = df_affichage[["Date", "Source_Feuille", "Type_Travail", "Statut", "Duree_Total", "Remarques"]].copy()
+            df_registre = df_affichage[["date", "source_feuille", "type_travail", "statut", "duree_total", "remarques"]].copy()
             
-            style_registre = df_registre.style.map(appliquer_couleur_jours_cloud, subset=["Duree_Total"])
+            style_registre = df_registre.style.map(appliquer_couleur_jours_cloud, subset=["duree_total"])
             
             evenement_selection = st.dataframe(
                 style_registre,
@@ -2682,12 +3803,12 @@ def page_synchronisation_cloud():
                 df_calcul = df_affichage
                 titre_barre = "Total Global"
                 
-            if not df_calcul.empty and "Duree_Num" in df_calcul.columns:
+            if not df_calcul.empty and "duree_num" in df_calcul.columns:
                 nb = len(df_calcul)
-                somme_h = df_calcul["Duree_Num"].sum()
-                moyenne_h = df_calcul["Duree_Num"].mean()
-                max_h = df_calcul["Duree_Num"].max()
-                min_h = df_calcul["Duree_Num"].min()
+                somme_h = df_calcul["duree_num"].sum()
+                moyenne_h = df_calcul["duree_num"].mean()
+                max_h = df_calcul["duree_num"].max()
+                min_h = df_calcul["duree_num"].min()
                 
                 def formater_en_hms(val_float):
                     if val_float <= 0: return "00:00:00"
@@ -2731,7 +3852,7 @@ def page_synchronisation_cloud():
         st.info("💡 Aucune donnée en cache. Cliquez sur 'Synchronisation Complète' pour importer les données depuis les 5 feuilles Google Sheets.")
 
     # --- ACTUALISATION AUTOMATIQUE À L'OUVERTURE ---
-    if "donnees_cloud_centralisees" not in st.session_state or not st.session_state["donnees_cloud_centralisees"]:
+    if not db_manager.get_all_cloud_data():
         with st.spinner("🔄 Actualisation automatique des données cloud..."):
             success, _ = importer_donnees_cloud(only_new=False)
             if success:
@@ -2739,23 +3860,40 @@ def page_synchronisation_cloud():
                 time.sleep(0.5)
                 st.rerun()
 
-# --- SYSTEME DE NAVIGATION ---
-if st.session_state.authentifie:
-    if st.session_state.user_role == "operateur":
-        pg = st.navigation({
-            "Menu Principal": [
-                st.Page(page_operateur_dashboard, title="Suivi des Tâches", icon="⏱️"),
-                st.Page(page_operateur_resume, title="Résumé & Planning", icon="📊"),
-            ]
-        })
-    else:  # admin
-        pg = st.navigation({
-            "Menu Principal": [
-                st.Page(page_gestion_agents, title="Gestion du Personnel", icon="👥"),
-                st.Page(page_planning, title="Planning par Semaine", icon="🗓️"),
-                st.Page(page_suivi_heures, title="Suivi des Heures", icon="⏱️"),
-                st.Page(page_synchronisation_cloud, title="Synchronisation Cloud", icon="🌐"),
-            ]
-        })
-    
-    pg.run()
+# --- GESTION DE LA PAGE CHAT VIA QUERY PARAM ---
+# Si l'utilisateur demande la page chat via ?page=chat, on l'affiche
+if st.query_params.get("page") == ["chat"]:
+    page_chat()
+else:
+    # --- SYSTEME DE NAVIGATION (sans le chat dans le menu) ---
+    if st.session_state.authentifie:
+        if st.session_state.user_role == "operateur":
+            pg = st.navigation({
+                "Menu Principal": [
+                    st.Page(page_operateur_dashboard, title="Suivi des Tâches", icon="⏱️"),
+                    st.Page(page_operateur_resume, title="Résumé & Planning", icon="📊"),
+                    st.Page(page_operateur_stats, title="Statistiques & Analyses", icon="📈"),
+                    st.Page(page_operateur_shared_tasks, title="📋 Répartition des tâches", icon="📋"),
+                ]
+            })
+        else:  # admin
+            pg = st.navigation({
+                "Menu Principal": [
+                    st.Page(page_gestion_agents, title="Gestion du Personnel", icon="👥"),
+                    st.Page(page_planning, title="Planning par Semaine", icon="🗓️"),
+                    st.Page(page_suivi_heures, title="Suivi des Heures", icon="⏱️"),
+                    st.Page(page_synchronisation_cloud, title="Synchronisation Cloud", icon="🌐"),
+                ]
+            })
+        
+        pg.run()
+
+# --- BOUTON FLOTTANT POUR LE CHAT (apparaît sur toutes les pages sauf le chat) ---
+# On affiche le bouton uniquement si on n'est pas déjà sur la page chat
+if st.query_params.get("page") != ["chat"]:
+    st.markdown("""
+        <a href="?page=chat" class="floating-chat" title="Ouvrir le chat">
+            💬
+            <span class="badge">!</span>
+        </a>
+    """, unsafe_allow_html=True)

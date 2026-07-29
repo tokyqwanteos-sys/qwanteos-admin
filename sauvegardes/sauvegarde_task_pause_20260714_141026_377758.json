@@ -1,0 +1,216 @@
+{
+    "timestamp": "2026-07-14T14:10:26.377630",
+    "utilisateur": "Ny Haingo",
+    "type_evenement": "task_pause",
+    "agents": [
+        {
+            "Nom": "Isaïa",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Elizara",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Toky",
+            "Poste": "Setup Leader"
+        },
+        {
+            "Nom": "Ny Haingo",
+            "Poste": "Setup Operator"
+        },
+        {
+            "Nom": "Vanja",
+            "Poste": "Setup Operator"
+        }
+    ],
+    "planning": {
+        "2026-07-01": {
+            "Toky": "OFF"
+        },
+        "2026-07-05": {
+            "Toky": "OFF",
+            "Ny Haingo": "Congé",
+            "Vanja": "OFF"
+        },
+        "2026-07-02": {
+            "Toky": "Travail",
+            "Ny Haingo": "OFF"
+        },
+        "2026-07-04": {
+            "Toky": "Travail",
+            "Ny Haingo": "OFF",
+            "Elizara": "OFF"
+        },
+        "2026-07-06": {
+            "Vanja": "OFF",
+            "Ny Haingo": "Congé"
+        },
+        "2026-07-07": {
+            "Vanja": "OFF",
+            "Toky": "OFF"
+        },
+        "2026-07-08": {
+            "Ny Haingo": "OFF",
+            "Isaïa": "OFF"
+        },
+        "2026-07-11": {
+            "Ny Haingo": "OFF",
+            "Toky": "OFF",
+            "Elizara": "OFF"
+        },
+        "2026-07-12": {
+            "Toky": "Congé",
+            "Isaïa": "OFF"
+        },
+        "2026-07-10": {
+            "Elizara": "OFF"
+        }
+    },
+    "heures": {
+        "2026-06-29": {
+            "Elizara": {
+                "total": 1.03,
+                "nuit": 0.0
+            },
+            "Isaïa": {
+                "total": 8.8,
+                "nuit": 0.0
+            },
+            "Ny Haingo": {
+                "total": 7.18,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 3.25,
+                "nuit": 0.0
+            }
+        },
+        "2026-06-30": {
+            "Elizara": {
+                "total": 8.78,
+                "nuit": 0.0
+            },
+            "Ny Haingo": {
+                "total": 6.75,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 7.85,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-01": {
+            "Elizara": {
+                "total": 8.12,
+                "nuit": 0.0
+            },
+            "Isaïa": {
+                "total": 7.77,
+                "nuit": 0.0
+            },
+            "Ny Haingo": {
+                "total": 8.12,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-02": {
+            "Elizara": {
+                "total": 8.2,
+                "nuit": 0.0
+            },
+            "Isaïa": {
+                "total": 8.53,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 8.42,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-03": {
+            "Isaïa": {
+                "total": 8.58,
+                "nuit": 0.0
+            },
+            "Ny Haingo": {
+                "total": 7.8,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 8.07,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-04": {
+            "Elizara": {
+                "total": 8.85,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 4.82,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-05": {
+            "Elizara": {
+                "total": 8.2,
+                "nuit": 0.0
+            },
+            "Isaïa": {
+                "total": 9.07,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-06": {
+            "Elizara": {
+                "total": 8.48,
+                "nuit": 0.0
+            },
+            "Isaïa": {
+                "total": 8.6,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 7.97,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-07": {
+            "Elizara": {
+                "total": 8.53,
+                "nuit": 0.0
+            },
+            "Isaïa": {
+                "total": 8.32,
+                "nuit": 0.0
+            },
+            "Ny Haingo": {
+                "total": 7.63,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 7.55,
+                "nuit": 0.0
+            }
+        },
+        "2026-07-08": {
+            "Elizara": {
+                "total": 8.1,
+                "nuit": 0.0
+            },
+            "Toky": {
+                "total": 5.0,
+                "nuit": 0.0
+            }
+        }
+    },
+    "donnees_cloud_centralisees": [
+        {
+            "Date": "23/06/2026",
+            "Type_Travail": " PREMIUM",
+            "Statut": "Fin",
+            "Duree_Total": "0:45:19",
+            "Remarques": NaN,
+            "Source_Feuille": "Toky",
+            "Date_Parsed": 
