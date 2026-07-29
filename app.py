@@ -466,425 +466,465 @@ def exporter_vers_google_sheets(utilisateur, df_export, spreadsheet_id):
         return False, f"❌ Erreur : {str(e)}"
 
 # --- CONFIGURATION DE L'APPLICATION ---
-st.set_page_config(page_title="Qwanteos-Setup Admin", layout="wide", page_icon="💼")
+st.set_page_config(page_title="Qwanteos-Setup Admin", layout="wide", page_icon="⚙️")
 
-# --- AJOUT D'UN ARRIÈRE-PLAN PROFESSIONNEL AVEC ANIMATIONS UNIQUEMENT VISUELLES ---
+# --- STYLE DARK TECH AVEC PARTICULES ANIMÉES ---
 st.markdown("""
     <style>
-    /* Gradient animé pour un effet professionnel */
-    .stApp {
-        background: linear-gradient(-45deg, #0f172a, #1e293b, #0f172a, #1e293b);
-        background-size: 400% 400%;
-        animation: gradient 15s ease infinite;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    
+    * {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
     }
     
-    @keyframes gradient {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
+    /* Fond sombre avec dégradé et animation */
+    .stApp {
+        background: #0a0e1a;
+        position: relative;
+        overflow: hidden;
+        min-height: 100vh;
     }
-
-    /* Ajustement de la transparence des blocs pour laisser voir le fond */
-    div[data-testid="stDataFrame"], .main .block-container {
-        background: rgba(255, 255, 255, 0.03);
-        border-radius: 15px;
-        padding: 20px !important;
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+    
+    /* Conteneur des particules */
+    .particles-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+    
+    .particle {
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(100, 180, 255, 0.15);
+        box-shadow: 0 0 20px rgba(100, 180, 255, 0.05);
+        animation: floatParticle 20s infinite alternate ease-in-out;
+    }
+    
+    /* Tailles et positions aléatoires (générées en JS via la classe) */
+    .particle:nth-child(1) { width: 4px; height: 4px; top: 10%; left: 5%; animation-duration: 22s; animation-delay: 0s; }
+    .particle:nth-child(2) { width: 6px; height: 6px; top: 30%; left: 80%; animation-duration: 25s; animation-delay: 2s; }
+    .particle:nth-child(3) { width: 3px; height: 3px; top: 60%; left: 20%; animation-duration: 18s; animation-delay: 4s; }
+    .particle:nth-child(4) { width: 5px; height: 5px; top: 80%; left: 70%; animation-duration: 28s; animation-delay: 1s; }
+    .particle:nth-child(5) { width: 7px; height: 7px; top: 40%; left: 50%; animation-duration: 20s; animation-delay: 3s; }
+    .particle:nth-child(6) { width: 4px; height: 4px; top: 15%; left: 40%; animation-duration: 24s; animation-delay: 5s; }
+    .particle:nth-child(7) { width: 6px; height: 6px; top: 70%; left: 10%; animation-duration: 26s; animation-delay: 2s; }
+    .particle:nth-child(8) { width: 3px; height: 3px; top: 90%; left: 90%; animation-duration: 19s; animation-delay: 6s; }
+    .particle:nth-child(9) { width: 5px; height: 5px; top: 50%; left: 30%; animation-duration: 30s; animation-delay: 0s; }
+    .particle:nth-child(10) { width: 4px; height: 4px; top: 20%; left: 60%; animation-duration: 21s; animation-delay: 4s; }
+    
+    @keyframes floatParticle {
+        0% { transform: translate(0, 0) scale(1); opacity: 0.3; }
+        25% { transform: translate(30px, -40px) scale(1.2); opacity: 0.8; }
+        50% { transform: translate(-20px, 20px) scale(0.8); opacity: 0.5; }
+        75% { transform: translate(15px, -15px) scale(1.1); opacity: 0.7; }
+        100% { transform: translate(-10px, 10px) scale(1); opacity: 0.3; }
+    }
+    
+    /* Lignes de réseau (effet grille) */
+    .grid-lines {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 0;
+        background-image: 
+            linear-gradient(rgba(100, 180, 255, 0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(100, 180, 255, 0.03) 1px, transparent 1px);
+        background-size: 50px 50px;
+        animation: gridMove 60s linear infinite;
+    }
+    
+    @keyframes gridMove {
+        0% { background-position: 0 0; }
+        100% { background-position: 50px 50px; }
+    }
+    
+    /* Conteneurs avec effet verre sombre */
+    div[data-testid="stDataFrame"], .main .block-container, .stTabs [data-baseweb="tab-panel"] {
+        background: rgba(12, 18, 34, 0.7) !important;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border-radius: 20px;
+        padding: 24px !important;
+        border: 1px solid rgba(100, 180, 255, 0.08);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        transition: all 0.3s ease;
         animation: fadeSlideUp 0.6s ease-out;
+        position: relative;
+        z-index: 1;
     }
     
     @keyframes fadeSlideUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
     }
     
-    /* Animation des métriques */
+    /* Métriques sombres */
     div[data-testid="stMetric"] {
-        animation: fadeSlideUp 0.8s ease-out;
-        transition: all 0.3s ease;
+        background: rgba(12, 18, 34, 0.6);
+        backdrop-filter: blur(12px);
+        border-radius: 16px;
+        padding: 16px 20px;
+        border: 1px solid rgba(100, 180, 255, 0.06);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        transition: all 0.25s ease;
+        animation: fadeSlideUp 0.7s ease-out;
     }
-    
     div[data-testid="stMetric"]:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 10px 30px rgba(46, 125, 50, 0.2);
+        transform: translateY(-4px) scale(1.01);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        border-color: rgba(100, 180, 255, 0.15);
     }
-    
     div[data-testid="stMetricValue"] {
-        animation: pulseGlow 2s ease-in-out infinite;
+        color: #d0e4ff;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        text-shadow: 0 0 20px rgba(100, 180, 255, 0.1);
+    }
+    div[data-testid="stMetricLabel"] {
+        color: #7a9bcb;
+        font-weight: 400;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
     }
     
-    @keyframes pulseGlow {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.03); }
-    }
-    
-    /* Animation des boutons */
+    /* Boutons tech */
     .stButton button {
-        transition: all 0.3s ease;
-        border-radius: 12px !important;
-        font-weight: 600 !important;
+        background: rgba(20, 30, 50, 0.6);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(100, 180, 255, 0.1);
+        border-radius: 14px;
+        padding: 8px 24px;
+        font-weight: 500;
+        color: #b0ccee;
+        transition: all 0.25s ease;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
     }
-    
     .stButton button:hover {
+        background: rgba(30, 50, 80, 0.8);
+        border-color: rgba(100, 180, 255, 0.3);
         transform: scale(1.02);
-        box-shadow: 0 8px 25px rgba(46, 125, 50, 0.3);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4), 0 0 20px rgba(100, 180, 255, 0.05);
+    }
+    .stButton button[data-baseweb="button"][kind="primary"] {
+        background: linear-gradient(135deg, #1a4a7a, #0d2b4a);
+        border-color: transparent;
+        color: white;
+        box-shadow: 0 4px 20px rgba(26, 74, 122, 0.3);
+    }
+    .stButton button[data-baseweb="button"][kind="primary"]:hover {
+        background: linear-gradient(135deg, #2a5a8a, #1a3a5a);
+        box-shadow: 0 8px 30px rgba(26, 74, 122, 0.5);
     }
     
-    /* Style des titres */
+    /* Titres lumineux */
     h1, h2, h3 {
-        color: #e2e8f0 !important;
-        font-weight: 700 !important;
+        color: #d0e4ff;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        text-shadow: 0 0 30px rgba(100, 180, 255, 0.05);
     }
-    
+    h1 {
+        font-size: 2.2rem;
+        font-weight: 700;
+    }
     h1::after {
         content: '';
         display: block;
-        width: 60px;
+        width: 48px;
         height: 3px;
-        background: linear-gradient(90deg, #2E7D32, #1565C0);
+        background: linear-gradient(90deg, #4a8ecf, #1a4a7a);
         border-radius: 2px;
-        margin-top: 5px;
-        animation: slideExpand 1s ease-out;
+        margin-top: 6px;
+        box-shadow: 0 0 20px rgba(74, 142, 207, 0.3);
     }
     
-    @keyframes slideExpand {
-        from { width: 0; }
-        to { width: 60px; }
+    /* Sidebar sombre */
+    .css-1d391kg {
+        background: rgba(8, 12, 24, 0.85) !important;
+        backdrop-filter: blur(24px);
+        border-right: 1px solid rgba(100, 180, 255, 0.06);
+        box-shadow: 2px 0 30px rgba(0, 0, 0, 0.3);
     }
     
-    /* Badge de statut animé */
+    /* Inputs */
+    .stTextInput input, .stSelectbox select, .stTextArea textarea {
+        background: rgba(12, 18, 34, 0.6);
+        border: 1px solid rgba(100, 180, 255, 0.08);
+        border-radius: 12px;
+        padding: 10px 14px;
+        color: #d0e4ff;
+        transition: all 0.25s ease;
+        backdrop-filter: blur(8px);
+    }
+    .stTextInput input:focus, .stSelectbox select:focus, .stTextArea textarea:focus {
+        border-color: #4a8ecf;
+        box-shadow: 0 0 0 3px rgba(74, 142, 207, 0.15);
+        background: rgba(12, 18, 34, 0.8);
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #1a4a7a;
+        border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #2a5a8a;
+    }
+    
+    /* Alertes */
+    .stAlert {
+        border-radius: 14px;
+        background: rgba(12, 18, 34, 0.7) !important;
+        backdrop-filter: blur(8px);
+        border-left: 4px solid #4a8ecf;
+        animation: slideInRight 0.4s ease-out;
+        color: #d0e4ff;
+    }
+    @keyframes slideInRight {
+        from { opacity: 0; transform: translateX(30px); }
+        to { opacity: 1; transform: translateX(0); }
+    }
+    
+    /* Badges */
     .status-badge {
         display: inline-block;
-        padding: 6px 16px;
+        padding: 4px 14px;
         border-radius: 20px;
-        background: linear-gradient(135deg, #2E7D32, #1B5E20);
-        color: white;
-        font-weight: 600;
-        font-size: 13px;
-        animation: pulseBadge 2s ease-in-out infinite;
+        font-size: 0.75rem;
+        font-weight: 500;
+        background: rgba(74, 142, 207, 0.12);
+        color: #8bb8ff;
+        border: 1px solid rgba(74, 142, 207, 0.15);
     }
-    
-    @keyframes pulseBadge {
-        0%, 100% { box-shadow: 0 0 20px rgba(46, 125, 50, 0.3); }
-        50% { box-shadow: 0 0 40px rgba(46, 125, 50, 0.6); }
-    }
-    
     .status-dot {
         display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        margin-right: 8px;
-        animation: pulseDot 1.5s ease-in-out infinite;
-    }
-    
-    .status-dot.online {
-        background: #4CAF50;
-        box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
-    }
-    
-    @keyframes pulseDot {
-        0%, 100% { transform: scale(1); opacity: 1; }
-        50% { transform: scale(1.3); opacity: 0.7; }
-    }
-    
-    /* Animation des alertes */
-    .stAlert {
-        animation: slideInRight 0.5s ease-out;
-        border-radius: 12px !important;
-    }
-    
-    @keyframes slideInRight {
-        from {
-            opacity: 0;
-            transform: translateX(50px);
-        }
-        to {
-            opacity: 1;
-            transform: translateX(0);
-        }
-    }
-    
-    /* Sidebar améliorée */
-    .css-1d391kg {
-        background: rgba(10, 14, 26, 0.95) !important;
-        backdrop-filter: blur(20px);
-        border-right: 1px solid rgba(255, 255, 255, 0.05);
-    }
-    
-    /* Animation des inputs */
-    .stTextInput input, .stSelectbox select {
-        transition: all 0.3s ease;
-        border-radius: 12px !important;
-    }
-    
-    .stTextInput input:focus, .stSelectbox select:focus {
-        border-color: #2E7D32 !important;
-        box-shadow: 0 0 20px rgba(46, 125, 50, 0.15);
-        transform: scale(1.01);
-    }
-    
-    /* Style du texte pour lisibilité sur fond sombre */
-    h1, h2, h3, p, div { color: #e2e8f0 !important; }
-    
-    /* Welcome page */
-    .welcome-container {
-        text-align: center;
-        margin-top: 5%;
-        padding: 40px;
-        background: rgba(30, 30, 30, 0.9);
-        backdrop-filter: blur(30px);
-        border-radius: 15px;
-        border: 2px solid #2E7D32;
-        box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.5);
-        animation: fadeSlideUp 0.8s ease-out;
-    }
-    .welcome-title {
-        color: #ffffff;
-        font-size: 42px;
-        font-weight: bold;
-        margin-bottom: 5px;
-    }
-    .welcome-subtitle {
-        color: #A0A0A0;
-        font-size: 18px;
-        margin-bottom: 25px;
-    }
-    .welcome-credit {
-        color: #2E7D32;
-        font-size: 22px;
-        font-weight: bold;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        margin-top: 20px;
-    }
-    
-    /* Scrollbar personnalisée */
-    ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+        background: #4ade80;
+        box-shadow: 0 0 12px rgba(74, 222, 128, 0.2);
+        animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.5; transform: scale(0.9); }
     }
     
-    ::-webkit-scrollbar-track {
-        background: rgba(255, 255, 255, 0.02);
-        border-radius: 10px;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background: linear-gradient(135deg, #2E7D32, #1565C0);
-        border-radius: 10px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(135deg, #1B5E20, #0D47A1);
-    }
-    
-    /* Animation des onglets */
-    .stTabs [data-baseweb="tab"] {
-        transition: all 0.3s ease;
-        border-radius: 10px 10px 0 0;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        background: rgba(46, 125, 50, 0.1);
-        transform: translateY(-2px);
-    }
-    
-    .stTabs [data-baseweb="tab-panel"] {
-        animation: fadeSlideUp 0.4s ease-out;
-    }
-    
-    /* Style du formulaire de login */
-    .login-form {
-        background: rgba(20, 20, 30, 0.95);
-        backdrop-filter: blur(20px);
-        border-radius: 20px;
-        padding: 30px;
-        border: 1px solid rgba(46, 125, 50, 0.3);
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-        animation: fadeSlideUp 0.6s ease-out;
-    }
-    
-    .login-form h3 {
-        color: #e2e8f0 !important;
-        margin-bottom: 20px;
-    }
-    
-    /* Style des onglets login/register */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        padding: 4px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 10px;
-        padding: 8px 20px;
-        color: #94a3b8 !important;
-        transition: all 0.3s ease;
-    }
-    
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background: rgba(46, 125, 50, 0.2);
-        color: #4CAF50 !important;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        background: rgba(255, 255, 255, 0.05);
-        color: #e2e8f0 !important;
-    }
-    
-    /* Responsive */
-    @media (max-width: 768px) {
-        .welcome-title {
-            font-size: 32px;
-        }
-        .welcome-container {
-            padding: 30px;
-        }
-    }
-
-    /* Style pour les tâches en cours */
+    /* Cartes de tâches */
     .task-card {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        padding: 15px;
-        margin: 8px 0;
-        border-left: 4px solid #4CAF50;
-        transition: all 0.3s ease;
+        background: rgba(12, 18, 34, 0.5);
+        backdrop-filter: blur(8px);
+        border-radius: 14px;
+        padding: 14px 18px;
+        margin-bottom: 10px;
+        border-left: 3px solid #4a8ecf;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.2);
     }
     .task-card:hover {
-        transform: translateX(5px);
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(20, 30, 50, 0.7);
+        transform: translateX(4px);
     }
     .task-card.paused {
-        border-left-color: #FFA726;
+        border-left-color: #f5b342;
     }
     .task-card.completed {
-        border-left-color: #4CAF50;
-        opacity: 0.8;
+        border-left-color: #66bb6a;
+        opacity: 0.7;
     }
     .task-timer {
-        font-size: 28px;
-        font-weight: bold;
-        font-family: monospace;
-        color: #4CAF50;
+        font-family: 'Inter', monospace;
+        font-weight: 600;
+        font-size: 1.6rem;
+        color: #4a8ecf;
+        letter-spacing: 0.04em;
+        text-shadow: 0 0 20px rgba(74, 142, 207, 0.2);
     }
     .task-timer.paused {
-        color: #FFA726;
+        color: #f5b342;
     }
     .task-status {
         display: inline-block;
-        padding: 2px 10px;
+        padding: 2px 12px;
         border-radius: 12px;
-        font-size: 11px;
-        font-weight: 600;
-    }
-    .task-status.running {
-        background: rgba(76, 175, 80, 0.2);
-        color: #4CAF50;
+        font-size: 0.7rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        background: rgba(74, 222, 128, 0.12);
+        color: #4ade80;
     }
     .task-status.paused {
-        background: rgba(255, 167, 38, 0.2);
-        color: #FFA726;
+        background: rgba(245, 179, 66, 0.12);
+        color: #f5b342;
     }
     .task-status.completed {
-        background: rgba(76, 175, 80, 0.2);
-        color: #4CAF50;
+        background: rgba(74, 222, 128, 0.08);
+        color: #4ade80;
     }
     
-    /* Animation pour le chronomètre */
-    @keyframes timerPulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.8; }
-    }
-    .timer-running {
-        animation: timerPulse 1s ease-in-out infinite;
-    }
-
-    /* --- STYLES POUR LE CHAT AMÉLIORÉ --- */
+    /* Chat */
     .chat-message {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
+        background: rgba(12, 18, 34, 0.5);
+        backdrop-filter: blur(8px);
+        border-radius: 14px;
         padding: 12px 16px;
-        margin-bottom: 10px;
-        border-left: 4px solid #4CAF50;
+        margin-bottom: 12px;
+        border-left: 3px solid #4a8ecf;
         animation: fadeSlideUp 0.4s ease-out;
     }
     .chat-message .sender {
         font-weight: 600;
-        color: #4CAF50;
+        color: #8bb8ff;
     }
     .chat-message .timestamp {
-        font-size: 11px;
-        color: #94a3b8;
+        font-size: 0.7rem;
+        color: #5a7a9a;
         float: right;
     }
     .chat-message .content {
-        margin-top: 5px;
-        color: #e2e8f0;
+        margin-top: 6px;
+        color: #d0e4ff;
     }
-    .chat-message .attachment {
-        margin-top: 8px;
-        max-width: 100%;
-        border-radius: 8px;
-    }
-    .emoji-btn {
-        font-size: 24px;
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        transition: transform 0.2s;
-        padding: 4px 8px;
-    }
-    .emoji-btn:hover {
-        transform: scale(1.3);
-    }
+    
+    /* Bouton flottant chat */
     .floating-chat {
         position: fixed;
         bottom: 30px;
         right: 30px;
         z-index: 1000;
-        background: linear-gradient(135deg, #2E7D32, #1B5E20);
+        background: linear-gradient(135deg, #1a4a7a, #0d2b4a);
         color: white;
         border-radius: 50%;
-        width: 70px;
-        height: 70px;
-        text-align: center;
-        box-shadow: 0 6px 20px rgba(46, 125, 50, 0.5);
-        cursor: pointer;
+        width: 60px;
+        height: 60px;
         display: flex;
         justify-content: center;
         align-items: center;
-        font-size: 36px;
-        transition: transform 0.3s, box-shadow 0.3s;
-        border: 2px solid #4CAF50;
+        font-size: 1.6rem;
+        box-shadow: 0 8px 30px rgba(26, 74, 122, 0.4);
+        transition: all 0.3s ease;
+        border: 1px solid rgba(100, 180, 255, 0.15);
         text-decoration: none;
+        cursor: pointer;
     }
     .floating-chat:hover {
-        transform: scale(1.1);
-        box-shadow: 0 8px 30px rgba(46, 125, 50, 0.8);
+        transform: scale(1.08);
+        box-shadow: 0 12px 40px rgba(26, 74, 122, 0.6);
     }
     .floating-chat .badge {
         position: absolute;
-        top: -5px;
-        right: -5px;
-        background: #C62828;
+        top: -4px;
+        right: -4px;
+        background: #ef4444;
         color: white;
         border-radius: 50%;
-        padding: 2px 8px;
-        font-size: 14px;
-        font-weight: bold;
+        padding: 0 6px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        min-width: 20px;
+        text-align: center;
+        line-height: 20px;
+    }
+    
+    /* Page de connexion */
+    .welcome-container {
+        text-align: center;
+        max-width: 600px;
+        margin: 8vh auto;
+        padding: 40px 32px;
+        background: rgba(8, 12, 24, 0.7);
+        backdrop-filter: blur(24px);
+        border-radius: 30px;
+        border: 1px solid rgba(100, 180, 255, 0.06);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        animation: fadeSlideUp 0.8s ease-out;
+        position: relative;
+        z-index: 1;
+    }
+    .welcome-title {
+        font-size: 2.8rem;
+        font-weight: 700;
+        color: #d0e4ff;
+        letter-spacing: -0.03em;
+        text-shadow: 0 0 40px rgba(74, 142, 207, 0.1);
+    }
+    .welcome-subtitle {
+        color: #7a9bcb;
+        font-size: 1.1rem;
+        margin-top: 4px;
+    }
+    .welcome-credit {
+        color: #4a8ecf;
+        font-size: 1.2rem;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        margin-top: 20px;
+        text-shadow: 0 0 20px rgba(74, 142, 207, 0.1);
+    }
+    .login-form {
+        background: rgba(8, 12, 24, 0.5);
+        backdrop-filter: blur(16px);
+        border-radius: 24px;
+        padding: 32px;
+        border: 1px solid rgba(100, 180, 255, 0.06);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+        .welcome-title { font-size: 2rem; }
+        .welcome-container { padding: 28px 16px; }
+    }
+    
+    /* Couleur du texte général */
+    p, div, span, label {
+        color: #d0e4ff !important;
+    }
+    .css-1d391kg p, .css-1d391kg div, .css-1d391kg span {
+        color: #d0e4ff !important;
+    }
+    
+    /* Positionnement du contenu */
+    .main .block-container {
+        position: relative;
+        z-index: 1;
     }
     </style>
+    
+    <!-- Conteneur des particules -->
+    <div class="particles-container">
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+    </div>
+    
+    <!-- Effet de grille -->
+    <div class="grid-lines"></div>
 """, unsafe_allow_html=True)
 
 # --- LOGIQUE DE PERSISTANCE DE SESSION & SAUVEGARDE ---
@@ -1105,13 +1145,13 @@ if not st.session_state.get("data_loaded", False):
 if not st.session_state.authentifie:
     st.markdown("""
         <div class="welcome-container">
-            <div class="welcome-title">💼 QWANTEOS-SETUP ADMIN</div>
-            <div class="welcome-subtitle">Système Sécurisé de Gestion & Pointage</div>
-            <hr style="border-color: #2E7D32; width: 60%; margin: auto; margin-bottom: 20px;">
-            <div class="welcome-credit">Created by Toky — Team Lead Setup Qwanteos</div>
-            <div style="margin-top: 20px;">
-                <span class="status-dot online"></span>
-                <span style="color: #4CAF50; font-weight: 500;">Système opérationnel</span>
+            <div class="welcome-title">⚙️ QWANTEOS-SETUP</div>
+            <div class="welcome-subtitle">Gestion & Pointage professionnel</div>
+            <hr style="border-color: rgba(100,180,255,0.08); width: 60%; margin: 20px auto;">
+            <div class="welcome-credit">Created by Toky — Team Lead Setup</div>
+            <div style="margin-top: 18px;">
+                <span class="status-dot"></span>
+                <span style="color: #7a9bcb; font-weight: 400;">Système opérationnel</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -1123,12 +1163,12 @@ if not st.session_state.authentifie:
         with st.container():
             st.markdown('<div class="login-form">', unsafe_allow_html=True)
             
-            tab1, tab2 = st.tabs(["🔐 Connexion", "📝 Inscription"])
+            tab1, tab2 = st.tabs(["Connexion", "Inscription"])
             
             # --- ONGLET CONNEXION ---
             with tab1:
                 with st.form("form_login"):
-                    st.markdown("### 🔐 Connexion")
+                    st.markdown("### Connexion")
                     identifiant = st.text_input("Nom d'utilisateur", value="")
                     mot_de_passe = st.text_input("Mot de passe", type="password")
                     btn_login = st.form_submit_button("Se connecter", use_container_width=True)
@@ -1162,8 +1202,8 @@ if not st.session_state.authentifie:
             # --- ONGLET INSCRIPTION ---
             with tab2:
                 with st.form("form_register"):
-                    st.markdown("### 📝 Créer un compte")
-                    st.info("🔒 Mot de passe : 8 caractères min, 1 majuscule, 1 minuscule, 1 chiffre")
+                    st.markdown("### Créer un compte")
+                    st.info("🔒 Mot de passe : 8 caractères, 1 majuscule, 1 minuscule, 1 chiffre")
                     
                     new_username = st.text_input("Nom d'utilisateur")
                     new_fullname = st.text_input("Nom complet (optionnel)")
@@ -1171,24 +1211,24 @@ if not st.session_state.authentifie:
                     # Sélection du rôle (plus que 2 rôles)
                     role_options = ["operateur", "admin"]
                     role_labels = {
-                        "operateur": "🔵 Opérateur - Accès limité (en développement)",
-                        "admin": "🟢 Administrateur - Contrôle total"
+                        "operateur": "Opérateur — Accès limité",
+                        "admin": "Administrateur — Contrôle total"
                     }
                     selected_role = st.selectbox(
-                        "Choisir le rôle du compte",
+                        "Rôle du compte",
                         options=role_options,
                         format_func=lambda x: role_labels[x],
-                        help="Sélectionnez le niveau d'accès souhaité"
+                        help="Sélectionnez le niveau d'accès"
                     )
                     
                     # Code d'accès pour admin uniquement
                     code_acces = ""
                     if selected_role == "admin":
                         code_acces = st.text_input(
-                            "🔑 Code d'accès Admin", 
+                            "Code d'accès Admin", 
                             type="password",
-                            placeholder="Entrez le code d'accès admin",
-                            help="Code d'accès requis pour créer un compte Administrateur !"
+                            placeholder="Entrez le code d'accès",
+                            help="Code requis pour créer un compte Administrateur"
                         )
                         st.caption("📌 Code d'accès requis")
                     else:
@@ -1197,7 +1237,7 @@ if not st.session_state.authentifie:
                     new_password = st.text_input("Mot de passe", type="password")
                     confirm_password = st.text_input("Confirmer le mot de passe", type="password")
                     
-                    btn_register = st.form_submit_button("📝 S'inscrire", use_container_width=True)
+                    btn_register = st.form_submit_button("S'inscrire", use_container_width=True)
                     
                     if btn_register:
                         if not new_username or not new_password or not confirm_password:
@@ -1231,14 +1271,15 @@ def page_operateur_dashboard():
     # En-tête utilisateur simplifié
     st.markdown(f"""
         <div style="
-            background: rgba(255, 255, 255, 0.03);
+            background: rgba(8, 12, 24, 0.5);
             padding: 10px 18px;
-            border-radius: 10px;
-            border-left: 3px solid #4CAF50;
+            border-radius: 12px;
+            border-left: 3px solid #4a8ecf;
             margin-bottom: 18px;
+            backdrop-filter: blur(8px);
         ">
-            <span style="color: #4CAF50; font-weight: 500;">👤 {st.session_state.user_actif}</span>
-            <span style="color: #94a3b8; margin-left: 20px; font-size: 0.9em;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #8bb8ff; font-weight: 500;">▸ {st.session_state.user_actif}</span>
+            <span style="color: #5a7a9a; margin-left: 20px; font-size: 0.85em;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1335,14 +1376,14 @@ def page_operateur_dashboard():
         # Métriques simplifiées
         col_met1, col_met2, col_met3 = st.columns(3)
         with col_met1:
-            st.metric("🟢 Actives", len([t for t in taches_actives if t["statut"] == "en_cours"]))
+            st.metric("Actives", len([t for t in taches_actives if t["statut"] == "en_cours"]))
         with col_met2:
-            st.metric("⏸️ Pause", len([t for t in taches_actives if t["statut"] == "pause"]))
+            st.metric("En pause", len([t for t in taches_actives if t["statut"] == "pause"]))
         with col_met3:
-            st.metric("✅ Terminées", len(taches_terminees))
+            st.metric("Terminées", len(taches_terminees))
         
         if taches_actives:
-            st.markdown("#### ⏳ Actives")
+            st.markdown("#### En cours")
             for task in taches_actives:
                 if task["statut"] == "en_cours":
                     elapsed = task["elapsed_seconds"] + (time.time() - task["last_start"])
@@ -1355,12 +1396,12 @@ def page_operateur_dashboard():
                 
                 if task["statut"] == "en_cours":
                     status_class = "running"
-                    status_text = "🟢 En cours"
-                    border_color = "#4CAF50"
+                    status_text = "En cours"
+                    border_color = "#4a8ecf"
                 else:
                     status_class = "paused"
-                    status_text = "⏸️ En pause"
-                    border_color = "#FFA726"
+                    status_text = "En pause"
+                    border_color = "#f5b342"
                 
                 # Affichage plus compact
                 with st.container():
@@ -1369,7 +1410,7 @@ def page_operateur_dashboard():
                         st.markdown(f"""
                             <div style="border-left: 3px solid {border_color}; padding-left: 10px;">
                                 <div style="font-weight: 500;">{task['tache']}</div>
-                                <div style="font-size: 0.8em; color: #94a3b8;">
+                                <div style="font-size: 0.8em; color: #7a9bcb;">
                                     {task['match']} | {task['wf']} | {task['ligue']}
                                 </div>
                                 <span class="task-status {status_class}">{status_text}</span>
@@ -1377,7 +1418,7 @@ def page_operateur_dashboard():
                         """, unsafe_allow_html=True)
                     with cols[1]:
                         st.markdown(f"""
-                            <div style="text-align: center; font-size: 1.3em; font-weight: bold; font-family: monospace; color: {border_color};">
+                            <div style="text-align: center; font-size: 1.4em; font-weight: 600; font-family: 'Inter', monospace; color: {border_color};">
                                 {heures:02d}:{minutes:02d}:{secondes:02d}
                             </div>
                         """, unsafe_allow_html=True)
@@ -1557,7 +1598,7 @@ def page_operateur_dashboard():
                         title="Répartition des tâches",
                         color_discrete_sequence=px.colors.qualitative.Set3
                     )
-                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0')
+                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff')
                     st.plotly_chart(fig, use_container_width=True)
                     
                     df_temps = df_historique.groupby("Tâche")["Temps (sec)"].sum().reset_index()
@@ -1569,9 +1610,9 @@ def page_operateur_dashboard():
                         color="Tâche",
                         labels={"Temps (sec)": "Temps (secondes)"}
                     )
-                    fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
-                                      xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-                                      yaxis=dict(gridcolor='rgba(255,255,255,0.1)'))
+                    fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff',
+                                      xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+                                      yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
                     st.plotly_chart(fig2, use_container_width=True)
         else:
             st.info("Aucune tâche dans l'historique.")
@@ -1627,20 +1668,21 @@ def page_operateur_dashboard():
 
 # --- PAGE RÉSUMÉ & PLANNING OPÉRATEUR ---
 def page_operateur_resume():
-    st.title("📊 Résumé & Planning Opérateur")
+    st.title("📊 Résumé & Planning")
     
     # Informations utilisateur
     st.markdown(f"""
         <div style="
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(8, 12, 24, 0.5);
             padding: 15px 20px;
             border-radius: 12px;
-            border-left: 4px solid #4CAF50;
+            border-left: 3px solid #4a8ecf;
             margin-bottom: 20px;
+            backdrop-filter: blur(8px);
         ">
-            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
-            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
-            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #8bb8ff; font-weight: 500;">▸ Connecté :</span>
+            <span style="color: #d0e4ff;">{st.session_state.user_actif}</span>
+            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -1845,7 +1887,7 @@ def page_operateur_resume():
             fig.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
-                font_color='#e2e8f0'
+                font_color='#d0e4ff'
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1868,15 +1910,16 @@ def page_operateur_stats():
     # Informations utilisateur
     st.markdown(f"""
         <div style="
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(8, 12, 24, 0.5);
             padding: 15px 20px;
             border-radius: 12px;
-            border-left: 4px solid #4CAF50;
+            border-left: 3px solid #4a8ecf;
             margin-bottom: 20px;
+            backdrop-filter: blur(8px);
         ">
-            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
-            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
-            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #8bb8ff; font-weight: 500;">▸ Connecté :</span>
+            <span style="color: #d0e4ff;">{st.session_state.user_actif}</span>
+            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -1969,7 +2012,7 @@ def page_operateur_stats():
             title="Répartition des tâches par type",
             color_discrete_sequence=px.colors.qualitative.Set3
         )
-        fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0')
+        fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff')
         st.plotly_chart(fig_pie, use_container_width=True)
     
     with col_g2:
@@ -1982,11 +2025,11 @@ def page_operateur_stats():
             y="temps_secondes",
             title="Temps total par jour",
             labels={"temps_secondes": "Temps (secondes)", "jour_str": "Date"},
-            color_discrete_sequence=["#4CAF50"]
+            color_discrete_sequence=["#4a8ecf"]
         )
-        fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
-                              xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-                              yaxis=dict(gridcolor='rgba(255,255,255,0.1)'))
+        fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff',
+                              xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+                              yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
         st.plotly_chart(fig_bar, use_container_width=True)
     
     st.markdown("---")
@@ -2052,9 +2095,9 @@ def page_operateur_stats():
         labels={"nb_taches": "Nombre de tâches", "jour_str": "Date"},
         markers=True
     )
-    fig_line.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
-                           xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-                           yaxis=dict(gridcolor='rgba(255,255,255,0.1)'))
+    fig_line.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff',
+                           xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+                           yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
     st.plotly_chart(fig_line, use_container_width=True)
 
 # --- PAGE CHAT AMÉLIORÉE AVEC EMOJI, STICKERS, PHOTO ET EFFACER TOUT ---
@@ -2064,16 +2107,17 @@ def page_chat():
     # Informations utilisateur
     st.markdown(f"""
         <div style="
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(8, 12, 24, 0.5);
             padding: 15px 20px;
             border-radius: 12px;
-            border-left: 4px solid #4CAF50;
+            border-left: 3px solid #4a8ecf;
             margin-bottom: 20px;
+            backdrop-filter: blur(8px);
         ">
-            <span style="color: #4CAF50; font-weight: 600;">👤 Connecté :</span>
-            <span style="color: #e2e8f0;">{st.session_state.user_actif}</span>
-            <span style="color: #94a3b8; margin-left: 20px;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
-            <span style="color: #94a3b8; margin-left: 20px;">💬 {len(get_chat_messages(limit=1000))} messages</span>
+            <span style="color: #8bb8ff; font-weight: 500;">▸ Connecté :</span>
+            <span style="color: #d0e4ff;">{st.session_state.user_actif}</span>
+            <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #5a7a9a; margin-left: 20px;">💬 {len(get_chat_messages(limit=1000))} messages</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -2197,14 +2241,15 @@ def page_operateur_shared_tasks():
     # En-tête utilisateur simplifié
     st.markdown(f"""
         <div style="
-            background: rgba(255, 255, 255, 0.03);
+            background: rgba(8, 12, 24, 0.5);
             padding: 10px 18px;
-            border-radius: 10px;
-            border-left: 3px solid #4CAF50;
+            border-radius: 12px;
+            border-left: 3px solid #4a8ecf;
             margin-bottom: 18px;
+            backdrop-filter: blur(8px);
         ">
-            <span style="color: #4CAF50; font-weight: 500;">👤 {st.session_state.user_actif}</span>
-            <span style="color: #94a3b8; margin-left: 20px; font-size: 0.9em;">📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
+            <span style="color: #8bb8ff; font-weight: 500;">▸ {st.session_state.user_actif}</span>
+            <span style="color: #5a7a9a; margin-left: 20px; font-size: 0.85em;">{datetime.now().strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -2255,13 +2300,13 @@ def page_operateur_shared_tasks():
             for task in tasks_disponibles:
                 with st.container():
                     st.markdown(f"""
-                        <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 10px; margin-bottom: 8px; border-left: 3px solid #4CAF50;">
+                        <div style="background: rgba(8, 12, 24, 0.5); border-radius: 12px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #4a8ecf; backdrop-filter: blur(8px);">
                             <div style="font-weight: 500;">{task['tache']}</div>
-                            <div style="font-size: 0.8em; color: #94a3b8;">
+                            <div style="font-size: 0.8em; color: #7a9bcb;">
                                 Match: {task['match_info']} | WF: {task['wf']} | Ligue: {task['ligue']}
                             </div>
-                            <div style="font-size: 0.8em; color: #94a3b8;">Remarques: {task['remarques']}</div>
-                            <div style="font-size: 0.7em; color: #64748b;">Créé le: {task['date_creation'][:16]}</div>
+                            <div style="font-size: 0.8em; color: #7a9bcb;">Remarques: {task['remarques']}</div>
+                            <div style="font-size: 0.7em; color: #5a7a9a;">Créé le: {task['date_creation'][:16]}</div>
                         </div>
                     """, unsafe_allow_html=True)
                     # Menu déroulant pour assigner à un agent
@@ -2292,17 +2337,17 @@ def page_operateur_shared_tasks():
             # Pour chaque agent, on affiche ses tâches
             for agent in agent_names:
                 tasks_agent = [t for t in shared_tasks if t["assigne_a"] == agent and t["statut"] != "termine"]
-                with st.expander(f"👤 {agent} ({len(tasks_agent)})", expanded=False):
+                with st.expander(f"▸ {agent} ({len(tasks_agent)})", expanded=False):
                     if tasks_agent:
                         for task in tasks_agent:
                             with st.container():
                                 st.markdown(f"""
-                                    <div style="background: rgba(255,255,255,0.02); border-radius: 6px; padding: 8px; margin-bottom: 6px; border-left: 2px solid #FFA726;">
+                                    <div style="background: rgba(8, 12, 24, 0.3); border-radius: 10px; padding: 10px; margin-bottom: 6px; border-left: 2px solid #f5b342; backdrop-filter: blur(4px);">
                                         <div style="font-weight: 500;">{task['tache']}</div>
-                                        <div style="font-size: 0.8em; color: #94a3b8;">
+                                        <div style="font-size: 0.8em; color: #7a9bcb;">
                                             Match: {task['match_info']} | WF: {task['wf']} | Ligue: {task['ligue']}
                                         </div>
-                                        <div style="font-size: 0.7em; color: #64748b;">Remarques: {task['remarques']}</div>
+                                        <div style="font-size: 0.7em; color: #5a7a9a;">Remarques: {task['remarques']}</div>
                                     </div>
                                 """, unsafe_allow_html=True)
                                 col_mark, col_unassign = st.columns([1, 1])
@@ -2326,8 +2371,8 @@ def page_operateur_shared_tasks():
 with st.sidebar:
     # Afficher le rôle de l'utilisateur
     role_emoji = {
-        "operateur": "🔵",
-        "admin": "🟢"
+        "operateur": "▸",
+        "admin": "▸"
     }
     role_label = {
         "operateur": "Opérateur",
@@ -2336,11 +2381,11 @@ with st.sidebar:
     
     st.markdown(f"""
         <div style="margin-bottom: 20px;">
-            <span class="status-dot online"></span>
-            <span style="color: #e2e8f0; font-weight: 500;">👤 Connecté :</span>
-            <span style="color: #4CAF50; font-weight: 600;">`{st.session_state.user_actif}`</span>
+            <span class="status-dot"></span>
+            <span style="color: #d0e4ff; font-weight: 500;">▸ Connecté :</span>
+            <span style="color: #8bb8ff; font-weight: 600;">`{st.session_state.user_actif}`</span>
             <br>
-            <span style="color: #94a3b8; font-size: 12px;">{role_emoji.get(st.session_state.user_role, '🔵')} {role_label.get(st.session_state.user_role, 'Opérateur')}</span>
+            <span style="color: #5a7a9a; font-size: 12px;">{role_emoji.get(st.session_state.user_role, '▸')} {role_label.get(st.session_state.user_role, 'Opérateur')}</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -2351,7 +2396,7 @@ with st.sidebar:
         if user_data.get("last_login"):
             last_login = datetime.fromisoformat(user_data["last_login"]).strftime("%d/%m/%Y %H:%M")
             st.markdown(f"""
-                <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">
+                <div style="font-size: 12px; color: #5a7a9a; margin-bottom: 10px;">
                     🕐 Dernière connexion: {last_login}
                 </div>
             """, unsafe_allow_html=True)
@@ -2759,8 +2804,8 @@ def page_gestion_agents():
             fig1.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
-                font_color='#e2e8f0',
-                legend=dict(font=dict(color='#e2e8f0'))
+                font_color='#d0e4ff',
+                legend=dict(font=dict(color='#d0e4ff'))
             )
             st.plotly_chart(fig1, use_container_width=True)
             
@@ -2777,10 +2822,10 @@ def page_gestion_agents():
                 fig2.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    font_color='#e2e8f0',
-                    legend=dict(font=dict(color='#e2e8f0')),
-                    xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-                    yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+                    font_color='#d0e4ff',
+                    legend=dict(font=dict(color='#d0e4ff')),
+                    xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+                    yaxis=dict(gridcolor='rgba(255,255,255,0.05)')
                 )
                 st.plotly_chart(fig2, use_container_width=True)
             
@@ -2796,10 +2841,10 @@ def page_gestion_agents():
             fig3.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
-                font_color='#e2e8f0',
-                legend=dict(font=dict(color='#e2e8f0')),
-                xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-                yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+                font_color='#d0e4ff',
+                legend=dict(font=dict(color='#d0e4ff')),
+                xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+                yaxis=dict(gridcolor='rgba(255,255,255,0.05)')
             )
             st.plotly_chart(fig3, use_container_width=True)
             
@@ -2825,10 +2870,10 @@ def page_gestion_agents():
                 fig4.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    font_color='#e2e8f0',
-                    legend=dict(font=dict(color='#e2e8f0')),
-                    xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-                    yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+                    font_color='#d0e4ff',
+                    legend=dict(font=dict(color='#d0e4ff')),
+                    xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+                    yaxis=dict(gridcolor='rgba(255,255,255,0.05)')
                 )
                 st.plotly_chart(fig4, use_container_width=True)
         else:
@@ -3798,18 +3843,18 @@ def page_synchronisation_cloud():
                         display: flex;
                         justify-content: flex-end;
                         gap: 15px;
-                        background-color: #E8F5E9;
-                        color: #1B5E20;
+                        background-color: rgba(8, 12, 24, 0.7);
+                        color: #d0e4ff;
                         padding: 6px 15px;
                         border-radius: 20px;
-                        font-family: monospace;
+                        font-family: 'Inter', monospace;
                         font-size: 13px;
-                        font-weight: bold;
-                        border: 1px solid #A5D6A7;
+                        font-weight: 500;
+                        border: 1px solid rgba(100, 180, 255, 0.08);
                         width: fit-content;
                         margin-left: auto;
                         margin-top: 10px;
-                        box-shadow: 0px 2px 5px rgba(0,0,0,0.1);
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
                         animation: fadeSlideUp 0.5s ease-out;
                     ">
                         <span>[ {titre_barre} ]</span>
