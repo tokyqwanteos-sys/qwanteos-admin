@@ -881,39 +881,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- LOGIQUE DE PERSISTANCE DE SESSION & SAUVEGARDE ---
-SESSION_FILE = "sauvegardes/session_state.json"
-
-def sauvegarder_etat_connexion(utilisateur, authentifie, role="operateur"):
-    try:
-        if not os.path.exists("sauvegardes"):
-            os.makedirs("sauvegardes")
-        
-        # Sauvegarder l'état de connexion
-        with open(SESSION_FILE, "w", encoding="utf-8") as f:
-            json.dump({
-                "user_actif": utilisateur, 
-                "authentifie": authentifie, 
-                "role": role,
-                "timestamp": datetime.now().isoformat()
-            }, f, ensure_ascii=False, indent=4)
-        
-        # Si l'utilisateur est authentifié, sauvegarder toutes les données
-        if authentifie and utilisateur:
-            executer_sauvegarde_auto("connexion", utilisateur)
-        
-        return True
-    except Exception as e:
-        return False
-
-def charger_etat_connexion():
-    if os.path.exists(SESSION_FILE):
-        try:
-            with open(SESSION_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("user_actif", ""), data.get("authentifie", False), data.get("role", "operateur")
-        except Exception:
-            return "", False, "operateur"
-    return "", False, "operateur"
+# SUPPRESSION des fonctions sauvegarder_etat_connexion et charger_etat_connexion
+# car elles stockaient l'état d'authentification dans un fichier partagé,
+# ce qui causait des interférences entre les sessions utilisateurs.
+# L'authentification est désormais gérée uniquement via st.session_state (propre à chaque navigateur).
 
 def executer_sauvegarde_auto(type_evenement, utilisateur):
     try:
@@ -996,20 +967,16 @@ def charger_derniere_sauvegarde():
         return False
 
 # --- INITIALISATION DE SESSION ---
-user_stocke, auth_stocke, role_stocke = charger_etat_connexion()
-
+# On n'utilise plus charger_etat_connexion() car elle lit un fichier partagé.
+# On initialise les variables de session avec des valeurs par défaut.
 if "authentifie" not in st.session_state:
-    st.session_state.authentifie = auth_stocke
-
+    st.session_state.authentifie = False
 if "user_actif" not in st.session_state:
-    st.session_state.user_actif = user_stocke
-
+    st.session_state.user_actif = ""
 if "user_role" not in st.session_state:
-    st.session_state.user_role = role_stocke
-
+    st.session_state.user_role = "operateur"
 if "data_loaded" not in st.session_state:
     st.session_state.data_loaded = False
-
 if "user_changed" not in st.session_state:
     st.session_state.user_changed = False
 
@@ -1102,6 +1069,7 @@ if "show_completed_tasks" not in st.session_state:
     st.session_state.show_completed_tasks = True
 
 # --- CHARGEMENT AUTOMATIQUE DES DONNÉES AU DÉMARRAGE ---
+# Ne pas restaurer l'état d'authentification, seulement les données applicatives.
 if not st.session_state.get("data_loaded", False):
     try:
         fichier_last = "sauvegardes/sauvegarde_last.json"
@@ -1109,7 +1077,7 @@ if not st.session_state.get("data_loaded", False):
             with open(fichier_last, "r", encoding="utf-8") as f:
                 donnees = json.load(f)
             
-            # Restaurer TOUTES les données
+            # Restaurer TOUTES les données (sauf l'authentification)
             st.session_state.agents = donnees.get("agents", [])
             st.session_state.planning = donnees.get("planning", {})
             st.session_state.heures = donnees.get("heures", {})
@@ -1167,9 +1135,11 @@ if not st.session_state.authentifie:
                                 st.session_state.user_role = get_user_role(identifiant)
                                 st.session_state.user_changed = True
                                 
-                                sauvegarder_etat_connexion(identifiant, True, st.session_state.user_role)
+                                # SUPPRESSION de l'appel à sauvegarder_etat_connexion()
+                                # car elle stockait l'état d'authentification dans un fichier partagé.
+                                # L'état est désormais uniquement dans st.session_state.
                                 
-                                # Sauvegarder après le chargement
+                                # Sauvegarder les données applicatives (pas l'authentification)
                                 executer_sauvegarde_auto("login", identifiant)
                                 
                                 with st.spinner("Synchronisation des bases de données..."):
@@ -2454,10 +2424,9 @@ with st.sidebar:
         # Sauvegarder avant la déconnexion
         executer_sauvegarde_auto("logout", st.session_state.user_actif)
         
-        # Sauvegarder l'état de connexion (authentifie = False)
-        sauvegarder_etat_connexion("", False, "operateur")
-        
-        # Déconnecter l'utilisateur mais GARDER LES DONNÉES
+        # SUPPRESSION de l'appel à sauvegarder_etat_connexion()
+        # car elle stockait l'état d'authentification dans un fichier partagé.
+        # On réinitialise simplement les variables de session.
         st.session_state.authentifie = False
         st.session_state.user_actif = ""
         st.session_state.user_role = "operateur"
