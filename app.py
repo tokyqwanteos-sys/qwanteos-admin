@@ -1255,7 +1255,7 @@ def page_operateur_dashboard():
     ]
     
     # --- SECTION NOUVELLE TÂCHE (plus compacte) ---
-    st.markdown("### 🚀 Nouvelle tâche")
+    st.markdown("### Nouvelle tâche")
     with st.container():
         col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
         with col1:
