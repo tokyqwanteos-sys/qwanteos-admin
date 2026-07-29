@@ -2768,7 +2768,7 @@ def convertir_temps_en_heures(val_str):
     except Exception:
         return 0.0
 
-# --- FONCTIONS POUR L'ANALYSE DES PERFORMANCES (adaptées pour colonnes minuscules) ---
+# --- FONCTIONS POUR L'ANALYSE DES PERFORMANCES (CORRIGÉES) ---
 def calculer_stats_agent(donnees_cloud, nom_agent, date_debut=None, date_fin=None):
     if not donnees_cloud:
         return None
@@ -2780,10 +2780,14 @@ def calculer_stats_agent(donnees_cloud, nom_agent, date_debut=None, date_fin=Non
     if df_agent.empty:
         return None
     
-    if date_debut and "date_parsed" in df_agent.columns:
-        df_agent = df_agent[df_agent["date_parsed"] >= pd.to_datetime(date_debut)]
-    if date_fin and "date_parsed" in df_agent.columns:
-        df_agent = df_agent[df_agent["date_parsed"] <= pd.to_datetime(date_fin)]
+    # Convertir date_parsed en datetime si elle existe
+    if "date_parsed" in df_agent.columns:
+        df_agent["date_parsed"] = pd.to_datetime(df_agent["date_parsed"], errors="coerce")
+        # Filtrer si des dates sont fournies
+        if date_debut is not None:
+            df_agent = df_agent[df_agent["date_parsed"].dt.date >= date_debut]
+        if date_fin is not None:
+            df_agent = df_agent[df_agent["date_parsed"].dt.date <= date_fin]
     
     if df_agent.empty:
         return None
@@ -2823,10 +2827,16 @@ def calculer_stats_tous_agents(donnees_cloud, date_debut=None, date_fin=None):
     
     df = pd.DataFrame(donnees_cloud)
     
-    if date_debut and "date_parsed" in df.columns:
-        df = df[df["date_parsed"] >= pd.to_datetime(date_debut)]
-    if date_fin and "date_parsed" in df.columns:
-        df = df[df["date_parsed"] <= pd.to_datetime(date_fin)]
+    # Convertir date_parsed en datetime si elle existe
+    if "date_parsed" in df.columns:
+        df["date_parsed"] = pd.to_datetime(df["date_parsed"], errors="coerce")
+        if date_debut is not None:
+            df = df[df["date_parsed"].dt.date >= date_debut]
+        if date_fin is not None:
+            df = df[df["date_parsed"].dt.date <= date_fin]
+    else:
+        # Si la colonne n'existe pas, on ne peut pas filtrer
+        pass
     
     if df.empty:
         return {}
@@ -2930,9 +2940,11 @@ def page_gestion_agents():
         df_cloud = pd.DataFrame(cloud_data)
         
         if date_debut_perf and "date_parsed" in df_cloud.columns:
-            df_cloud = df_cloud[df_cloud["date_parsed"] >= pd.to_datetime(date_debut_perf)]
+            df_cloud["date_parsed"] = pd.to_datetime(df_cloud["date_parsed"], errors="coerce")
+            df_cloud = df_cloud[df_cloud["date_parsed"].dt.date >= date_debut_perf]
         if date_fin_perf and "date_parsed" in df_cloud.columns:
-            df_cloud = df_cloud[df_cloud["date_parsed"] <= pd.to_datetime(date_fin_perf)]
+            df_cloud["date_parsed"] = pd.to_datetime(df_cloud["date_parsed"], errors="coerce")
+            df_cloud = df_cloud[df_cloud["date_parsed"].dt.date <= date_fin_perf]
         
         if not df_cloud.empty:
             fig1 = px.pie(
