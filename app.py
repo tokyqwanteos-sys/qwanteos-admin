@@ -20,6 +20,13 @@ from PIL import Image
 
 import db_manager  # ← Nouvel import
 
+# --- LISTE GLOBALE DES TÂCHES DISPONIBLES (utilisée dans plusieurs pages) ---
+TACHES_DISPONIBLES = [
+    "INTEGRATION", "OTHER CAM", "PREMIUM", "CORRECTION",
+    "SUBSTITUTIONS", "FEP", "MATCH SETUP", "ATTENTE VIDEOS",
+    "CHECK", "PREPARATION", "FICHIER", "SCOUTING"
+]
+
 # --- INITIALISATION DE LA BASE DE DONNÉES ---
 db_manager.init_db()
 
@@ -1247,13 +1254,6 @@ def page_operateur_dashboard():
         else:
             st.info("Aucune tâche assignée pour le moment.")
     
-    # Liste des tâches disponibles
-    TACHES_DISPONIBLES = [
-        "INTEGRATION", "OTHER CAM", "PREMIUM", "CORRECTION",
-        "SUBSTITUTIONS", "FEP", "MATCH SETUP", "ATTENTE VIDEOS",
-        "CHECK", "PREPARATION", "FICHIER", "SCOUTING"
-    ]
-    
     # --- SECTION NOUVELLE TÂCHE (plus compacte) ---
     st.markdown("### Nouvelle tâche")
     with st.container():
@@ -2222,7 +2222,12 @@ def page_operateur_shared_tasks():
     with st.expander("➕ Ajouter une nouvelle tâche", expanded=False):
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            new_tache = st.text_input("Tâche", placeholder="Ex: INTEGRATION")
+            # --- MODIFICATION ICI : remplacement du text_input par un selectbox ---
+            new_tache = st.selectbox(
+                "Tâche",
+                options=TACHES_DISPONIBLES,
+                key="new_tache_select"
+            )
         with col2:
             new_match = st.text_input("Match", placeholder="vs")
         with col3:
@@ -2236,7 +2241,7 @@ def page_operateur_shared_tasks():
                 st.toast("✅ Tâche ajoutée !", icon="✅")
                 st.rerun()
             else:
-                st.warning("⚠️ Veuillez saisir une tâche.")
+                st.warning("⚠️ Veuillez sélectionner une tâche.")
     
     st.markdown("---")
     
