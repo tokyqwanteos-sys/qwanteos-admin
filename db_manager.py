@@ -9,6 +9,8 @@ DB_PATH = "qwanteos.db"
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # Activer le mode WAL pour améliorer la concurrence en multi-utilisateurs
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 def init_db():
