@@ -1432,6 +1432,32 @@ def page_operateur_dashboard():
                                 # executer_sauvegarde_auto("task_complete", st.session_state.user_actif)
                                 st.toast(f"✅ {task['tache']} terminée ({task['temps_formate']})", icon="✅")
                                 st.rerun()
+                    
+                    # --- NOUVELLE SECTION : GESTION DES REMARQUES POUR LES TÂCHES EN COURS ---
+                    with st.container():
+                        col_remarque, col_btn_remarque = st.columns([4, 1])
+                        with col_remarque:
+                            remarque_actuelle = task.get("remarques", "")
+                            nouvelle_remarque = st.text_input(
+                                "Remarque",
+                                value=remarque_actuelle,
+                                key=f"remarque_{task['id']}",
+                                placeholder="Ajoutez une remarque sur ce traitement...",
+                                label_visibility="collapsed"
+                            )
+                        with col_btn_remarque:
+                            if st.button("💬 Mettre à jour", key=f"update_remarque_{task['id']}", help="Enregistrer la remarque"):
+                                if nouvelle_remarque != task.get("remarques", ""):
+                                    task["remarques"] = nouvelle_remarque
+                                    # Mise à jour en base (requête directe)
+                                    conn = db_manager.get_db()
+                                    c = conn.cursor()
+                                    c.execute("UPDATE taches SET remarques = ? WHERE id = ?", (nouvelle_remarque, task["db_id"]))
+                                    conn.commit()
+                                    conn.close()
+                                    st.toast("✅ Remarque mise à jour !", icon="💬")
+                                    st.rerun()
+                    
                     st.markdown("---")
         else:
             st.info("Aucune tâche active.")
