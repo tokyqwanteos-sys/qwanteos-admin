@@ -2393,6 +2393,165 @@ def page_operateur_shared_tasks():
         else:
             st.info("Aucun agent trouvé.")
 
+# --- NOUVELLE PAGE ADMIN : GESTION DES COMPTES OPÉRATEURS ---
+def page_gestion_comptes():
+    check_inactivity()
+    st.title("👤 Gestion des Comptes Opérateurs")
+
+    if st.session_state.user_role != "admin":
+        st.warning("🚫 Accès non autorisé.")
+        return
+
+    # --- Journal des connexions ---
+    with st.expander("📋 Journal des Connexions", expanded=False):
+        log_file = "sauvegardes/connection_log.json"
+        if os.path.exists(log_file):
+            try:
+                with open(log_file, "r", encoding="utf-8") as f:
+                    logs = json.load(f)
+                if logs:
+                    # Convertir les timestamps manuellement pour éviter les erreurs de parsing
+                    for log in logs:
+                        ts = log.get("timestamp")
+                        if ts:
+                            try:
+                                dt = datetime.fromisoformat(ts)
+                                # Si le datetime est naive, on lui attribue le fuseau MADA
+                                if dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=MADA_TZ)
+                                # Formater en local
+                                log["timestamp_formatted"] = dt.strftime("%d/%m/%Y %H:%M:%S")
+                            except Exception:
+                                log["timestamp_formatted"] = ts
+                        else:
+                            log["timestamp_formatted"] = ""
+                    # Créer le DataFrame avec la colonne formatée
+                    df_logs = pd.DataFrame(logs)
+                    if "timestamp_formatted" in df_logs.columns:
+                        df_logs["timestamp"] = df_logs["timestamp_formatted"]
+                        df_logs = df_logs.drop(columns=["timestamp_formatted"])
+                    # Réorganiser les colonnes si souhaité
+                    st.dataframe(df_logs, use_container_width=True, hide_index=True)
+                    if st.button("🗑️ Effacer les logs de connexion", type="secondary"):
+                        os.remove(log_file)
+                        st.toast("🗑️ Logs effacés", icon="🗑️")
+                        st.rerun()
+                else:
+                    st.info("Aucun log de connexion.")
+            except Exception as e:
+                st.error(f"Erreur de lecture des logs : {e}")
+        else:
+            st.info("Aucun log de connexion.")
+
+    st.markdown("---")
+
+    # --- Liste des comptes ---
+    st.subheader("📋 Liste des comptes")
+    users = load_users()
+    if not users:
+        st.info("Aucun compte utilisateur enregistré.")
+        return
+
+    current_user = st.session_state.user_actif
+
+    # Construction des lignes avec boutons
+    for username, info in users.items():
+        cols = st.columns([1.5, 2, 1, 2, 1.5, 1.5, 2, 1.5])
+        with cols[0]:
+            st.write(username)
+        with cols[1]:
+            st.write(info.get("full_name", ""))
+        with cols[2]:
+            st.write(info.get("role", "operateur"))
+        with cols[3]:
+            last_login = info.get("last_login")
+            if last_login:
+                try:
+                    dt = datetime.fromisoformat(last_login)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=MADA_TZ)
+                    st.write(dt.strftime("%d/%m/%Y %H:%M:%S"))
+                except:
+                    st.write(last_login)
+            else:
+                st.write("Jamais")
+        with cols[4]:
+            att = info.get("login_attempts", 0)
+            st.write(f"{att}/5")
+        with cols[5]:
+            locked = info.get("locked_until")
+            if locked:
+                try:
+                    dt_lock = datetime.fromisoformat(locked)
+                    if dt_lock.tzinfo is None:
+                        dt_lock = dt_lock.replace(tzinfo=MADA_TZ)
+                    if dt_lock > datetime.now(MADA_TZ):
+                        st.write("🔒 Verrouillé")
+                    else:
+                        st.write("✅ Déverrouillé")
+                except:
+                    st.write(locked)
+            else:
+                st.write("✅ Déverrouillé")
+        with cols[6]:
+            # Statut en ligne (si dernière connexion < 5 min)
+            if last_login:
+                try:
+                    dt = datetime.fromisoformat(last_login)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=MADA_TZ)
+                    if (datetime.now(MADA_TZ) - dt).total_seconds() < 300:
+                        st.write("🟢 En ligne")
+                    else:
+                        st.write("🔴 Hors ligne")
+                except:
+                    st.write("❓ Inconnu")
+            else:
+                st.write("⚫ Inactif")
+        with cols[7]:
+            if username == current_user:
+                st.button("🚫 Supprimer", disabled=True, key=f"del_{username}", help="Vous ne pouvez pas supprimer votre propre compte")
+            else:
+                # Confirmation en deux clics
+                confirm_key = f"confirm_del_{username}"
+                if st.button("🗑️ Supprimer", key=f"del_btn_{username}"):
+                    if st.session_state.get(confirm_key, False):
+                        # Supprimer le compte
+                        del users[username]
+                        save_users(users)
+                        st.toast(f"✅ Compte {username} supprimé", icon="🗑️")
+                        # Si l'utilisateur supprimé est l'actuel, on le déconnecte (mais on a désactivé le bouton)
+                        st.rerun()
+                    else:
+                        st.session_state[confirm_key] = True
+                        st.warning(f"⚠️ Cliquez à nouveau pour confirmer la suppression de {username}")
+        st.markdown("---")
+
+    # --- Déverrouiller un compte ---
+    st.subheader("🔓 Déverrouiller un compte")
+    locked_users = []
+    for u, info in users.items():
+        locked = info.get("locked_until")
+        if locked:
+            try:
+                dt_lock = datetime.fromisoformat(locked)
+                if dt_lock.tzinfo is None:
+                    dt_lock = dt_lock.replace(tzinfo=MADA_TZ)
+                if dt_lock > datetime.now(MADA_TZ):
+                    locked_users.append(u)
+            except:
+                pass
+    if locked_users:
+        selected = st.selectbox("Sélectionner un compte verrouillé", locked_users)
+        if st.button("Déverrouiller", type="primary"):
+            users[selected]["locked_until"] = None
+            users[selected]["login_attempts"] = 0
+            save_users(users)
+            st.toast(f"🔓 Compte {selected} déverrouillé", icon="🔓")
+            st.rerun()
+    else:
+        st.info("Aucun compte verrouillé.")
+
 # --- BARRE LATÉRALE GLOBALE AVEC AFFICHAGE DU RÔLE ---
 with st.sidebar:
     # Afficher le rôle de l'utilisateur
@@ -3975,6 +4134,8 @@ else:
                     st.Page(page_planning, title="Planning par Semaine", icon="🗓️"),
                     st.Page(page_suivi_heures, title="Suivi des Heures", icon="⏱️"),
                     st.Page(page_synchronisation_cloud, title="Synchronisation Cloud", icon="🌐"),
+                    # Nouvelle page admin pour la gestion des comptes
+                    st.Page(page_gestion_comptes, title="Gestion des Comptes", icon="👤"),
                 ]
             })
         
