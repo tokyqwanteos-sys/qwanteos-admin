@@ -2419,92 +2419,141 @@ def page_operateur_shared_tasks():
         else:
             st.info("Aucun agent trouvé.")
 
-# --- NOUVELLE PAGE ADMIN : GESTION DES COMPTES OPÉRATEURS ---
+# ========================= PAGE ADMIN FUSIONNEE : COMPTES + TÂCHES =========================
 def page_gestion_comptes():
     check_inactivity()
-    st.title("👤 Gestion des Comptes Opérateurs")
+    st.title("👤 Gestion des Comptes & Tâches")
 
     if st.session_state.user_role != "admin":
         st.warning("🚫 Accès non autorisé.")
         return
 
-    # --- Journal des connexions ---
-    with st.expander("📋 Journal des Connexions", expanded=False):
-        log_file = "sauvegardes/connection_log.json"
-        if os.path.exists(log_file):
-            try:
-                with open(log_file, "r", encoding="utf-8") as f:
-                    logs = json.load(f)
-                if logs:
-                    # Convertir les timestamps manuellement pour éviter les erreurs de parsing
-                    for log in logs:
-                        ts = log.get("timestamp")
-                        if ts:
-                            try:
-                                dt = datetime.fromisoformat(ts)
-                                # Si le datetime est naive, on lui attribue le fuseau MADA
-                                if dt.tzinfo is None:
-                                    dt = dt.replace(tzinfo=MADA_TZ)
-                                # Formater en local
-                                log["timestamp_formatted"] = dt.strftime("%d/%m/%Y %H:%M:%S")
-                            except Exception:
-                                log["timestamp_formatted"] = ts
-                        else:
-                            log["timestamp_formatted"] = ""
-                    # Créer le DataFrame avec la colonne formatée
-                    df_logs = pd.DataFrame(logs)
-                    if "timestamp_formatted" in df_logs.columns:
-                        df_logs["timestamp"] = df_logs["timestamp_formatted"]
-                        df_logs = df_logs.drop(columns=["timestamp_formatted"])
-                    # Réorganiser les colonnes si souhaité
-                    st.dataframe(df_logs, use_container_width=True, hide_index=True)
-                    if st.button("🗑️ Effacer les logs de connexion", type="secondary"):
-                        os.remove(log_file)
-                        st.toast("🗑️ Logs effacés", icon="🗑️")
-                        st.rerun()
-                else:
-                    st.info("Aucun log de connexion.")
-            except Exception as e:
-                st.error(f"Erreur de lecture des logs : {e}")
-        else:
-            st.info("Aucun log de connexion.")
+    # --- Création des onglets ---
+    tab1, tab2 = st.tabs(["👥 Gestion des Comptes", "📋 Gestion des Tâches"])
 
-    st.markdown("---")
-
-    # --- Liste des comptes ---
-    st.subheader("📋 Liste des comptes")
-    users = load_users()
-    if not users:
-        st.info("Aucun compte utilisateur enregistré.")
-        return
-
-    current_user = st.session_state.user_actif
-
-    # Construction des lignes avec boutons
-    for username, info in users.items():
-        cols = st.columns([1.5, 2, 1, 2, 1.5, 1.5, 2, 1.5])
-        with cols[0]:
-            st.write(username)
-        with cols[1]:
-            st.write(info.get("full_name", ""))
-        with cols[2]:
-            st.write(info.get("role", "operateur"))
-        with cols[3]:
-            last_login = info.get("last_login")
-            if last_login:
+    # ==================== ONGLET 1 : COMPTES ====================
+    with tab1:
+        st.subheader("Gestion des Comptes Utilisateurs")
+        
+        # --- Journal des connexions ---
+        with st.expander("📋 Journal des Connexions", expanded=False):
+            log_file = "sauvegardes/connection_log.json"
+            if os.path.exists(log_file):
                 try:
-                    dt = datetime.fromisoformat(last_login)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=MADA_TZ)
-                    st.write(dt.strftime("%d/%m/%Y %H:%M:%S"))
-                except:
-                    st.write(last_login)
+                    with open(log_file, "r", encoding="utf-8") as f:
+                        logs = json.load(f)
+                    if logs:
+                        for log in logs:
+                            ts = log.get("timestamp")
+                            if ts:
+                                try:
+                                    dt = datetime.fromisoformat(ts)
+                                    if dt.tzinfo is None:
+                                        dt = dt.replace(tzinfo=MADA_TZ)
+                                    log["timestamp_formatted"] = dt.strftime("%d/%m/%Y %H:%M:%S")
+                                except Exception:
+                                    log["timestamp_formatted"] = ts
+                            else:
+                                log["timestamp_formatted"] = ""
+                        df_logs = pd.DataFrame(logs)
+                        if "timestamp_formatted" in df_logs.columns:
+                            df_logs["timestamp"] = df_logs["timestamp_formatted"]
+                            df_logs = df_logs.drop(columns=["timestamp_formatted"])
+                        st.dataframe(df_logs, use_container_width=True, hide_index=True)
+                        if st.button("🗑️ Effacer les logs de connexion", type="secondary"):
+                            os.remove(log_file)
+                            st.toast("🗑️ Logs effacés", icon="🗑️")
+                            st.rerun()
+                    else:
+                        st.info("Aucun log de connexion.")
+                except Exception as e:
+                    st.error(f"Erreur de lecture des logs : {e}")
             else:
-                st.write("Jamais")
-        with cols[4]:
-            att = info.get("login_attempts", 0)
-            st.write(f"{att}/5")
-        with cols[5]:
+                st.info("Aucun log de connexion.")
+
+        st.markdown("---")
+
+        # --- Liste des comptes ---
+        st.subheader("📋 Liste des comptes")
+        users = load_users()
+        if not users:
+            st.info("Aucun compte utilisateur enregistré.")
+            return
+
+        current_user = st.session_state.user_actif
+
+        for username, info in users.items():
+            cols = st.columns([1.5, 2, 1, 2, 1.5, 1.5, 2, 1.5])
+            with cols[0]:
+                st.write(username)
+            with cols[1]:
+                st.write(info.get("full_name", ""))
+            with cols[2]:
+                st.write(info.get("role", "operateur"))
+            with cols[3]:
+                last_login = info.get("last_login")
+                if last_login:
+                    try:
+                        dt = datetime.fromisoformat(last_login)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=MADA_TZ)
+                        st.write(dt.strftime("%d/%m/%Y %H:%M:%S"))
+                    except:
+                        st.write(last_login)
+                else:
+                    st.write("Jamais")
+            with cols[4]:
+                att = info.get("login_attempts", 0)
+                st.write(f"{att}/5")
+            with cols[5]:
+                locked = info.get("locked_until")
+                if locked:
+                    try:
+                        dt_lock = datetime.fromisoformat(locked)
+                        if dt_lock.tzinfo is None:
+                            dt_lock = dt_lock.replace(tzinfo=MADA_TZ)
+                        if dt_lock > datetime.now(MADA_TZ):
+                            st.write("🔒 Verrouillé")
+                        else:
+                            st.write("✅ Déverrouillé")
+                    except:
+                        st.write(locked)
+                else:
+                    st.write("✅ Déverrouillé")
+            with cols[6]:
+                if last_login:
+                    try:
+                        dt = datetime.fromisoformat(last_login)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=MADA_TZ)
+                        if (datetime.now(MADA_TZ) - dt).total_seconds() < 300:
+                            st.write("🟢 En ligne")
+                        else:
+                            st.write("🔴 Hors ligne")
+                    except:
+                        st.write("❓ Inconnu")
+                else:
+                    st.write("⚫ Inactif")
+            with cols[7]:
+                if username == current_user:
+                    st.button("🚫 Supprimer", disabled=True, key=f"del_{username}", help="Vous ne pouvez pas supprimer votre propre compte")
+                else:
+                    confirm_key = f"confirm_del_{username}"
+                    if st.button("🗑️ Supprimer", key=f"del_btn_{username}"):
+                        if st.session_state.get(confirm_key, False):
+                            del users[username]
+                            save_users(users)
+                            st.toast(f"✅ Compte {username} supprimé", icon="🗑️")
+                            st.rerun()
+                        else:
+                            st.session_state[confirm_key] = True
+                            st.warning(f"⚠️ Cliquez à nouveau pour confirmer la suppression de {username}")
+            st.markdown("---")
+
+        # --- Déverrouiller un compte ---
+        st.subheader("🔓 Déverrouiller un compte")
+        locked_users = []
+        for u, info in users.items():
             locked = info.get("locked_until")
             if locked:
                 try:
@@ -2512,71 +2561,265 @@ def page_gestion_comptes():
                     if dt_lock.tzinfo is None:
                         dt_lock = dt_lock.replace(tzinfo=MADA_TZ)
                     if dt_lock > datetime.now(MADA_TZ):
-                        st.write("🔒 Verrouillé")
-                    else:
-                        st.write("✅ Déverrouillé")
+                        locked_users.append(u)
                 except:
-                    st.write(locked)
-            else:
-                st.write("✅ Déverrouillé")
-        with cols[6]:
-            # Statut en ligne (si dernière connexion < 5 min)
-            if last_login:
-                try:
-                    dt = datetime.fromisoformat(last_login)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=MADA_TZ)
-                    if (datetime.now(MADA_TZ) - dt).total_seconds() < 300:
-                        st.write("🟢 En ligne")
-                    else:
-                        st.write("🔴 Hors ligne")
-                except:
-                    st.write("❓ Inconnu")
-            else:
-                st.write("⚫ Inactif")
-        with cols[7]:
-            if username == current_user:
-                st.button("🚫 Supprimer", disabled=True, key=f"del_{username}", help="Vous ne pouvez pas supprimer votre propre compte")
-            else:
-                # Confirmation en deux clics
-                confirm_key = f"confirm_del_{username}"
-                if st.button("🗑️ Supprimer", key=f"del_btn_{username}"):
-                    if st.session_state.get(confirm_key, False):
-                        # Supprimer le compte
-                        del users[username]
-                        save_users(users)
-                        st.toast(f"✅ Compte {username} supprimé", icon="🗑️")
-                        # Si l'utilisateur supprimé est l'actuel, on le déconnecte (mais on a désactivé le bouton)
-                        st.rerun()
-                    else:
-                        st.session_state[confirm_key] = True
-                        st.warning(f"⚠️ Cliquez à nouveau pour confirmer la suppression de {username}")
+                    pass
+        if locked_users:
+            selected = st.selectbox("Sélectionner un compte verrouillé", locked_users)
+            if st.button("Déverrouiller", type="primary"):
+                users[selected]["locked_until"] = None
+                users[selected]["login_attempts"] = 0
+                save_users(users)
+                st.toast(f"🔓 Compte {selected} déverrouillé", icon="🔓")
+                st.rerun()
+        else:
+            st.info("Aucun compte verrouillé.")
+
+    # ==================== ONGLET 2 : TÂCHES ====================
+    with tab2:
+        st.subheader("📋 Gestion des Tâches (Admin)")
+
+        # --- Fonctions internes ---
+        def get_all_tasks_with_agent():
+            conn = db_manager.get_db()
+            c = conn.cursor()
+            c.execute("""
+                SELECT t.*, a.nom as agent_nom
+                FROM taches t
+                LEFT JOIN agents a ON t.agent_id = a.id
+                ORDER BY t.date_debut DESC
+            """)
+            rows = c.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
+
+        def delete_task_by_id(task_id):
+            conn = db_manager.get_db()
+            c = conn.cursor()
+            c.execute("DELETE FROM taches WHERE id = ?", (task_id,))
+            conn.commit()
+            conn.close()
+
+        def delete_tasks_by_ids(task_ids):
+            if not task_ids:
+                return
+            placeholders = ','.join(['?'] * len(task_ids))
+            conn = db_manager.get_db()
+            c = conn.cursor()
+            c.execute(f"DELETE FROM taches WHERE id IN ({placeholders})", task_ids)
+            conn.commit()
+            conn.close()
+
+        def update_task_admin(task_id, **kwargs):
+            db_manager.update_task(task_id, **kwargs)
+
+        # --- Récupération des agents pour les filtres ---
+        agents_db = db_manager.get_all_agents()
+        agent_list = [a["nom"] for a in agents_db]
+
+        # --- Filtres ---
+        st.markdown("### 🔍 Filtres")
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        with col_f1:
+            filter_agent = st.selectbox("Agent", options=["Tous"] + agent_list, index=0)
+        with col_f2:
+            filter_statut = st.selectbox("Statut", options=["Tous", "en_cours", "pause", "termine"], index=0)
+        with col_f3:
+            filter_date_debut = st.date_input("Date début (min)", value=None)
+        with col_f4:
+            filter_date_fin = st.date_input("Date début (max)", value=None)
+
+        # --- Chargement des données ---
+        all_tasks = get_all_tasks_with_agent()
+
+        # --- Application des filtres ---
+        if filter_agent != "Tous":
+            all_tasks = [t for t in all_tasks if t.get("agent_nom") == filter_agent]
+        if filter_statut != "Tous":
+            all_tasks = [t for t in all_tasks if t.get("statut") == filter_statut]
+        if filter_date_debut:
+            all_tasks = [t for t in all_tasks if t.get("date_debut") and datetime.fromisoformat(t["date_debut"]).date() >= filter_date_debut]
+        if filter_date_fin:
+            all_tasks = [t for t in all_tasks if t.get("date_debut") and datetime.fromisoformat(t["date_debut"]).date() <= filter_date_fin]
+
         st.markdown("---")
 
-    # --- Déverrouiller un compte ---
-    st.subheader("🔓 Déverrouiller un compte")
-    locked_users = []
-    for u, info in users.items():
-        locked = info.get("locked_until")
-        if locked:
-            try:
-                dt_lock = datetime.fromisoformat(locked)
-                if dt_lock.tzinfo is None:
-                    dt_lock = dt_lock.replace(tzinfo=MADA_TZ)
-                if dt_lock > datetime.now(MADA_TZ):
-                    locked_users.append(u)
-            except:
-                pass
-    if locked_users:
-        selected = st.selectbox("Sélectionner un compte verrouillé", locked_users)
-        if st.button("Déverrouiller", type="primary"):
-            users[selected]["locked_until"] = None
-            users[selected]["login_attempts"] = 0
-            save_users(users)
-            st.toast(f"🔓 Compte {selected} déverrouillé", icon="🔓")
-            st.rerun()
-    else:
-        st.info("Aucun compte verrouillé.")
+        if not all_tasks:
+            st.info("Aucune tâche trouvée avec les filtres sélectionnés.")
+            return
+
+        # --- Métriques ---
+        total_tasks = len(all_tasks)
+        en_cours = len([t for t in all_tasks if t.get("statut") == "en_cours"])
+        pause = len([t for t in all_tasks if t.get("statut") == "pause"])
+        termine = len([t for t in all_tasks if t.get("statut") == "termine"])
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("📊 Total", total_tasks)
+        col_m2.metric("▶️ En cours", en_cours)
+        col_m3.metric("⏸️ Pause", pause)
+        col_m4.metric("✅ Terminé", termine)
+
+        st.markdown("---")
+
+        # --- Affichage des tâches avec data_editor modifiable (incluant dates) ---
+        display_data = []
+        for task in all_tasks:
+            # Récupérer les événements pour extraire pause/reprise si besoin (non utilisé ici)
+            display_data.append({
+                "ID": task["id"],
+                "Agent": task.get("agent_nom", "N/A"),
+                "Tâche": task.get("tache", ""),
+                "Match": task.get("match_info", ""),
+                "WF": task.get("wf", ""),
+                "Ligue": task.get("ligue", ""),
+                "Remarques": task.get("remarques", ""),
+                "Statut": task.get("statut", ""),
+                "Date début": task.get("date_debut", ""),  # ISO
+                "Date fin": task.get("date_fin", ""),      # ISO
+                "Temps": task.get("temps_formate", "00:00:00"),
+            })
+        df_display = pd.DataFrame(display_data)
+
+        # Ajout d'une colonne de sélection
+        df_editable = df_display.copy()
+        df_editable["_select"] = False
+
+        # Data editor avec colonnes modifiables : Tâche, Match, WF, Ligue, Remarques, Statut, Date début, Date fin
+        edited_df = st.data_editor(
+            df_editable,
+            column_config={
+                "_select": st.column_config.CheckboxColumn("Sélectionner", default=False),
+                "ID": st.column_config.TextColumn("ID", disabled=True),
+                "Agent": st.column_config.TextColumn("Agent", disabled=True),
+                "Tâche": st.column_config.TextColumn("Tâche", disabled=False),
+                "Match": st.column_config.TextColumn("Match", disabled=False),
+                "WF": st.column_config.TextColumn("WF", disabled=False),
+                "Ligue": st.column_config.TextColumn("Ligue", disabled=False),
+                "Remarques": st.column_config.TextColumn("Remarques", disabled=False),
+                "Statut": st.column_config.SelectboxColumn(
+                    "Statut",
+                    options=["en_cours", "pause", "termine"],
+                    disabled=False
+                ),
+                "Date début": st.column_config.TextColumn("Date début (ISO)", disabled=False, help="Format ISO: YYYY-MM-DDTHH:MM:SS"),
+                "Date fin": st.column_config.TextColumn("Date fin (ISO)", disabled=False, help="Format ISO: YYYY-MM-DDTHH:MM:SS"),
+                "Temps": st.column_config.TextColumn("Temps", disabled=True),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="tasks_editor"
+        )
+
+        # --- Actions ---
+        st.markdown("### ⚡ Actions")
+
+        col_actions1, col_actions2, col_actions3, col_actions4 = st.columns(4)
+
+        with col_actions1:
+            # Appliquer les modifications (tous les champs, y compris dates)
+            if st.button("💾 Appliquer les modifications", type="primary", use_container_width=True):
+                original = df_display.copy()
+                edited = edited_df.copy()
+                modifications = 0
+                for idx, row in edited.iterrows():
+                    task_id = row["ID"]
+                    orig_row = original[original["ID"] == task_id].iloc[0]
+                    fields_to_update = {}
+                    # Comparer tous les champs modifiables
+                    for field in ["Tâche", "Match", "WF", "Ligue", "Remarques", "Statut"]:
+                        new_val = row[field]
+                        orig_val = orig_row[field]
+                        if new_val != orig_val:
+                            db_field = {
+                                "Tâche": "tache",
+                                "Match": "match_info",
+                                "WF": "wf",
+                                "Ligue": "ligue",
+                                "Remarques": "remarques",
+                                "Statut": "statut"
+                            }[field]
+                            fields_to_update[db_field] = new_val
+                    # Comparer les dates
+                    new_date_debut = row["Date début"]
+                    new_date_fin = row["Date fin"]
+                    orig_date_debut = orig_row["Date début"]
+                    orig_date_fin = orig_row["Date fin"]
+                    if new_date_debut != orig_date_debut:
+                        fields_to_update["date_debut"] = new_date_debut
+                    if new_date_fin != orig_date_fin:
+                        fields_to_update["date_fin"] = new_date_fin
+                    # Si date_debut ou date_fin changent, recalculer la durée
+                    if "date_debut" in fields_to_update or "date_fin" in fields_to_update:
+                        try:
+                            d_debut = datetime.fromisoformat(fields_to_update.get("date_debut", orig_date_debut))
+                            d_fin = datetime.fromisoformat(fields_to_update.get("date_fin", orig_date_fin))
+                            if d_debut and d_fin:
+                                delta = (d_fin - d_debut).total_seconds()
+                                if delta >= 0:
+                                    fields_to_update["temps_total_secondes"] = int(delta)
+                                    fields_to_update["temps_formate"] = format_duration_hms(delta)
+                                else:
+                                    st.warning(f"La date fin est antérieure à la date début pour la tâche {task_id}.")
+                        except Exception as e:
+                            st.warning(f"Erreur de conversion des dates pour la tâche {task_id}: {e}")
+                    if fields_to_update:
+                        try:
+                            update_task_admin(task_id, **fields_to_update)
+                            modifications += 1
+                        except Exception as e:
+                            st.error(f"Erreur mise à jour tâche {task_id}: {e}")
+                if modifications > 0:
+                    st.toast(f"✅ {modifications} tâche(s) modifiée(s) avec succès.", icon="✅")
+                    st.rerun()
+                else:
+                    st.info("Aucune modification détectée.")
+
+        with col_actions2:
+            # Supprimer les tâches sélectionnées
+            selected_ids = edited_df[edited_df["_select"]]["ID"].tolist()
+            if selected_ids:
+                if st.button(f"🗑️ Supprimer {len(selected_ids)} sélectionnée(s)", type="secondary", use_container_width=True):
+                    if st.session_state.get("confirm_delete_tasks", False):
+                        delete_tasks_by_ids(selected_ids)
+                        st.session_state.confirm_delete_tasks = False
+                        st.toast(f"🗑️ {len(selected_ids)} tâche(s) supprimée(s).", icon="🗑️")
+                        st.rerun()
+                    else:
+                        st.session_state.confirm_delete_tasks = True
+                        st.warning("⚠️ Cliquez à nouveau pour confirmer la suppression définitive.")
+            else:
+                st.button("🗑️ Supprimer sélectionnée(s)", disabled=True, use_container_width=True)
+
+        with col_actions3:
+            # Supprimer une tâche spécifique par ID
+            task_id_to_delete = st.number_input("ID à supprimer", min_value=1, step=1, value=1)
+            if st.button("🗑️ Supprimer cette tâche", type="secondary", use_container_width=True):
+                if st.session_state.get("confirm_delete_single", False):
+                    delete_task_by_id(task_id_to_delete)
+                    st.session_state.confirm_delete_single = False
+                    st.toast(f"🗑️ Tâche {task_id_to_delete} supprimée.", icon="🗑️")
+                    st.rerun()
+                else:
+                    st.session_state.confirm_delete_single = True
+                    st.warning(f"⚠️ Cliquez à nouveau pour confirmer la suppression de la tâche {task_id_to_delete}.")
+
+        with col_actions4:
+            # Rafraîchir les données
+            if st.button("🔄 Rafraîchir", use_container_width=True):
+                st.rerun()
+
+        # --- Bouton d'export CSV ---
+        st.markdown("---")
+        if st.button("📥 Exporter les tâches filtrées en CSV", use_container_width=True):
+            csv = df_display.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label="📥 Télécharger CSV",
+                data=csv,
+                file_name=f"taches_admin_{datetime.now(MADA_TZ).strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+
+# ========================= FIN PAGE FUSIONNEE =========================
 
 # --- BARRE LATÉRALE GLOBALE AVEC AFFICHAGE DU RÔLE ---
 with st.sidebar:
@@ -4160,8 +4403,8 @@ else:
                     st.Page(page_planning, title="Planning par Semaine", icon="🗓️"),
                     st.Page(page_suivi_heures, title="Suivi des Heures", icon="⏱️"),
                     st.Page(page_synchronisation_cloud, title="Synchronisation Cloud", icon="🌐"),
-                    # Nouvelle page admin pour la gestion des comptes
-                    st.Page(page_gestion_comptes, title="Gestion des Comptes", icon="👤"),
+                    # Page fusionnée (Comptes + Tâches)
+                    st.Page(page_gestion_comptes, title="Gestion des Comptes & Tâches", icon="👤"),
                 ]
             })
         
