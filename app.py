@@ -1791,6 +1791,7 @@ def calculer_temps_nuit(dt_debut, dt_fin):
         current = next_min
     return total_nuit
 
+# ============ PAGE STATISTIQUES & ANALYSES (MISE À JOUR) ============
 def page_operateur_stats():
     st.title("📊 Statistiques & Analyses")
     st.markdown(f"""
@@ -1807,10 +1808,12 @@ def page_operateur_stats():
             <span style="color: #5a7a9a; margin-left: 20px;">{datetime.now(MADA_TZ).strftime('%d/%m/%Y %H:%M')}</span>
         </div>
     """, unsafe_allow_html=True)
+
     taches_data = st.session_state.taches_operateur
     if not taches_data:
-        st.info("📋 Aucune tâche terminée. Commencez à utiliser le chronomètre pour générer des statistiques.")
+        st.info("📋 Aucune tâche terminée. Commencez à utiliser le chronomètre ou importez depuis Google Sheets pour générer des statistiques.")
         return
+
     records = []
     for tache, entries in taches_data.items():
         for entry in entries:
@@ -1826,25 +1829,47 @@ def page_operateur_stats():
                 "remarques": entry.get("remarques", ""),
                 "evenements": entry.get("evenements", [])
             })
+
     df = pd.DataFrame(records)
     if df.empty:
         st.info("Aucune donnée à afficher.")
         return
+
+    # Fonction de parsing robuste
     def parse_date(date_str):
         if not date_str or date_str == "N/A":
             return None
         try:
+            # Format complet avec heure
             dt = datetime.strptime(date_str, "%d/%m/%Y %H:%M:%S")
             dt = dt.replace(tzinfo=MADA_TZ)
             return dt
-        except:
-            return None
+        except ValueError:
+            try:
+                # Format sans heure
+                dt = datetime.strptime(date_str, "%d/%m/%Y")
+                dt = dt.replace(tzinfo=MADA_TZ)
+                return dt
+            except ValueError:
+                try:
+                    # Autres formats via pandas
+                    dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+                    if pd.isna(dt):
+                        return None
+                    dt = dt.to_pydatetime()
+                    dt = dt.replace(tzinfo=MADA_TZ)
+                    return dt
+                except:
+                    return None
+
     df["date_debut_dt"] = df["date_debut"].apply(parse_date)
     df["date_fin_dt"] = df["date_fin"].apply(parse_date)
     df = df.dropna(subset=["date_debut_dt", "date_fin_dt"])
     if df.empty:
         st.warning("Aucune tâche avec des dates valides.")
         return
+
+    # Calcul du temps de nuit (22h-5h)
     df["temps_nuit_sec"] = df.apply(
         lambda row: calculer_temps_nuit(row["date_debut_dt"], row["date_fin_dt"]),
         axis=1
@@ -1852,6 +1877,8 @@ def page_operateur_stats():
     df["temps_jour_sec"] = df["temps_secondes"] - df["temps_nuit_sec"]
     df["temps_nuit_formate"] = df["temps_nuit_sec"].apply(format_duration_hms)
     df["temps_jour_formate"] = df["temps_jour_sec"].apply(format_duration_hms)
+
+    # Filtres dans la sidebar
     st.sidebar.markdown("---")
     st.sidebar.subheader("📅 Filtres")
     date_min = df["date_debut_dt"].min().date()
@@ -1861,17 +1888,28 @@ def page_operateur_stats():
         date_debut_filtre = st.date_input("Date début", value=date_min, min_value=date_min, max_value=date_max, key="stats_date_debut")
     with col_filtre2:
         date_fin_filtre = st.date_input("Date fin", value=date_max, min_value=date_min, max_value=date_max, key="stats_date_fin")
+
+    # Filtre par type de tâche
+    types_possibles = sorted(df["tache"].unique())
+    type_choisi = st.sidebar.selectbox("Type de tâche", options=["Tous"] + types_possibles, index=0)
+
     mask = (df["date_debut_dt"].dt.date >= date_debut_filtre) & (df["date_debut_dt"].dt.date <= date_fin_filtre)
+    if type_choisi != "Tous":
+        mask = mask & (df["tache"] == type_choisi)
     df_filtre = df[mask]
+
     if df_filtre.empty:
         st.warning("Aucune donnée pour la période sélectionnée.")
         return
+
+    # Métriques globales
     total_taches = len(df_filtre)
     total_temps_sec = df_filtre["temps_secondes"].sum()
     moyenne_sec = df_filtre["temps_secondes"].mean() if total_taches > 0 else 0
     mediane_sec = df_filtre["temps_secondes"].median() if total_taches > 0 else 0
     max_sec = df_filtre["temps_secondes"].max() if total_taches > 0 else 0
     min_sec = df_filtre["temps_secondes"].min() if total_taches > 0 else 0
+
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("📋 Tâches", total_taches)
     col2.metric("⏱️ Total", format_duration_hms(total_temps_sec))
@@ -1879,16 +1917,21 @@ def page_operateur_stats():
     col4.metric("📈 Médiane", format_duration_hms(mediane_sec))
     col5.metric("🔺 Max", format_duration_hms(max_sec))
     col6.metric("🔻 Min", format_duration_hms(min_sec))
+
     st.markdown("---")
+
+    # Analyse Nuit / Jour
     st.subheader("🌙 Analyse Nuit / Jour")
     total_nuit_sec = df_filtre["temps_nuit_sec"].sum()
     total_jour_sec = df_filtre["temps_jour_sec"].sum()
     total_sec = total_nuit_sec + total_jour_sec
     taux_nuit = (total_nuit_sec / total_sec * 100) if total_sec > 0 else 0
+
     col_n1, col_n2, col_n3 = st.columns(3)
     col_n1.metric("🌙 Total Nuit", format_duration_hms(total_nuit_sec))
     col_n2.metric("☀️ Total Jour", format_duration_hms(total_jour_sec))
     col_n3.metric("📊 Taux Nuit", f"{taux_nuit:.1f}%")
+
     if total_sec > 0:
         fig_nuit = px.pie(
             names=["Nuit", "Jour"],
@@ -1900,7 +1943,10 @@ def page_operateur_stats():
         st.plotly_chart(fig_nuit, use_container_width=True)
     else:
         st.info("Aucune donnée pour l'analyse Nuit/Jour.")
+
     st.markdown("---")
+
+    # Graphiques
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         fig_pie = px.pie(
@@ -1911,6 +1957,7 @@ def page_operateur_stats():
         )
         fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff')
         st.plotly_chart(fig_pie, use_container_width=True)
+
     with col_g2:
         df_jour = df_filtre.groupby(df_filtre["date_debut_dt"].dt.date)["temps_secondes"].sum().reset_index()
         df_jour["jour_str"] = df_jour["date_debut_dt"].astype(str)
@@ -1926,7 +1973,10 @@ def page_operateur_stats():
                               xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
                               yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
         st.plotly_chart(fig_bar, use_container_width=True)
+
     st.markdown("---")
+
+    # Performances par type de tâche
     st.subheader("📋 Performances par type de tâche")
     df_type = df_filtre.groupby("tache").agg(
         nombre=("tache", "count"),
@@ -1943,6 +1993,7 @@ def page_operateur_stats():
     df_type["temps_min_str"] = df_type["temps_min"].apply(format_duration_hms)
     df_type["nuit_total_str"] = df_type["nuit_total"].apply(format_duration_hms)
     df_type["jour_total_str"] = df_type["jour_total"].apply(format_duration_hms)
+
     st.dataframe(
         df_type[["tache", "nombre", "temps_total_str", "temps_moyen_str", "temps_max_str", "temps_min_str", "nuit_total_str", "jour_total_str"]],
         use_container_width=True,
@@ -1958,7 +2009,10 @@ def page_operateur_stats():
             "jour_total_str": "Total Jour"
         }
     )
+
     st.markdown("---")
+
+    # Performance quotidienne
     st.subheader("📅 Performance quotidienne")
     df_perf_jour = df_filtre.groupby(df_filtre["date_debut_dt"].dt.date).agg(
         nb_taches=("tache", "count"),
@@ -1972,6 +2026,7 @@ def page_operateur_stats():
     df_perf_jour["temps_moyen_str"] = df_perf_jour["temps_moyen"].apply(format_duration_hms)
     df_perf_jour["nuit_total_str"] = df_perf_jour["nuit_total"].apply(format_duration_hms)
     df_perf_jour["jour_total_str"] = df_perf_jour["jour_total"].apply(format_duration_hms)
+
     st.dataframe(
         df_perf_jour[["jour_str", "nb_taches", "temps_total_str", "temps_moyen_str", "nuit_total_str", "jour_total_str"]],
         use_container_width=True,
@@ -1985,6 +2040,8 @@ def page_operateur_stats():
             "jour_total_str": "Jour"
         }
     )
+
+    # Graphique d'évolution
     fig_line = px.line(
         df_perf_jour,
         x="jour_str",
@@ -1997,6 +2054,8 @@ def page_operateur_stats():
                            xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
                            yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
     st.plotly_chart(fig_line, use_container_width=True)
+
+# ============ FIN PAGE STATISTIQUES ============
 
 def page_chat():
     st.title("💬 Chat Interne")
