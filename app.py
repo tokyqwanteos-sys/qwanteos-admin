@@ -491,6 +491,148 @@ def exporter_vers_google_sheets(utilisateur, df_export, spreadsheet_id):
     except Exception as e:
         return False, f"❌ Erreur : {str(e)}"
 
+# --- NOUVELLE FONCTION : IMPORTATION DEPUIS GOOGLE SHEETS ---
+def importer_depuis_google_sheets(utilisateur, spreadsheet_id):
+    """
+    Importe les données depuis la feuille Google Sheets de l'utilisateur
+    et les réinjecte dans la session et la base de données.
+    """
+    try:
+        client = get_google_sheet_client()
+        if client is None:
+            return False, "Impossible d'initialiser le client Google Sheets."
+        
+        sheet = client.open_by_key(spreadsheet_id)
+        
+        # Vérifier si la feuille existe
+        try:
+            worksheet = sheet.worksheet(utilisateur)
+        except gspread.exceptions.WorksheetNotFound:
+            return False, f"❌ Aucune feuille trouvée pour l'utilisateur '{utilisateur}'."
+        
+        # Lire toutes les données
+        all_records = worksheet.get_all_values()
+        if not all_records or len(all_records) < 2:
+            return False, "❌ La feuille est vide ou ne contient pas de données."
+        
+        # Extraire les en-têtes
+        headers = all_records[0]
+        data_rows = all_records[1:]
+        
+        # Convertir en DataFrame
+        df_import = pd.DataFrame(data_rows, columns=headers)
+        
+        # Vérifier les colonnes nécessaires
+        required_cols = ["START", "PAUSE", "REPRISE", "FIN", "DATE", "MATCH / WF", "LIGUE", "TACHES", "STATUTS", "TOTAL", "REMARQUES"]
+        missing = [col for col in required_cols if col not in df_import.columns]
+        if missing:
+            return False, f"❌ Colonnes manquantes dans la feuille : {', '.join(missing)}"
+        
+        # Nettoyer les données : remplacer les NaN et les chaînes vides
+        df_import = df_import.fillna("")
+        
+        # Compter les lignes importées
+        nb_lignes = len(df_import)
+        if nb_lignes == 0:
+            return False, "❌ Aucune ligne de données à importer."
+        
+        # --- Reconstruction des tâches dans la session ---
+        # On va créer des entrées dans st.session_state.taches_operateur
+        # Chaque ligne correspond à une tâche terminée
+        
+        # Récupérer l'agent_id pour la base de données (si besoin)
+        agents_db = db_manager.get_all_agents()
+        agent_id = None
+        for ag in agents_db:
+            if ag["nom"].lower() == utilisateur.lower():
+                agent_id = ag["id"]
+                break
+        
+        if agent_id is None:
+            return False, f"❌ L'utilisateur '{utilisateur}' n'est pas associé à un agent dans la base de données."
+        
+        # Parcourir chaque ligne et l'ajouter à la session
+        nouvelles_taches = 0
+        for _, row in df_import.iterrows():
+            tache = row["TACHES"].strip()
+            if not tache:
+                continue  # ignorer les lignes vides
+            
+            # Construire les événements à partir des colonnes START, PAUSE, REPRISE, FIN
+            evenements = []
+            start = row["START"].strip()
+            pause = row["PAUSE"].strip()
+            reprise = row["REPRISE"].strip()
+            fin = row["FIN"].strip()
+            if start:
+                evenements.append({"type": "START", "time": start})
+            if pause:
+                evenements.append({"type": "PAUSE", "time": pause})
+            if reprise:
+                evenements.append({"type": "REPRISE", "time": reprise})
+            if fin:
+                evenements.append({"type": "FIN", "time": fin})
+            
+            # Récupérer le temps total (format HH:MM:SS)
+            total_str = row["TOTAL"].strip()
+            # Convertir en secondes
+            try:
+                if total_str and ":" in total_str:
+                    parts = total_str.split(":")
+                    if len(parts) == 3:
+                        total_sec = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
+                    elif len(parts) == 2:
+                        total_sec = int(parts[0])*60 + int(parts[1])
+                    else:
+                        total_sec = 0
+                else:
+                    total_sec = 0
+            except:
+                total_sec = 0
+            
+            # Construire l'entrée d'historique
+            entry = {
+                "date_debut": row["DATE"].strip(),
+                "date_fin": row["DATE"].strip(),  # on n'a pas de date de fin séparée, on utilise la même
+                "tache": tache,
+                "temps_secondes": total_sec,
+                "temps_formate": total_str if total_str else "00:00:00",
+                "match": row["MATCH / WF"].strip().split("/")[0].strip() if row["MATCH / WF"].strip() else "",
+                "wf": row["MATCH / WF"].strip().split("/")[-1].strip() if "/" in row["MATCH / WF"].strip() else "",
+                "ligue": row["LIGUE"].strip(),
+                "remarques": row["REMARQUES"].strip(),
+                "statut": row["STATUTS"].strip() if row["STATUTS"].strip() else "Terminé",
+                "evenements": evenements
+            }
+            
+            # Ajouter à la session
+            if tache not in st.session_state.taches_operateur:
+                st.session_state.taches_operateur[tache] = []
+            st.session_state.taches_operateur[tache].append(entry)
+            nouvelles_taches += 1
+            
+            # Optionnel : aussi insérer dans la base de données
+            # On pourrait appeler db_manager.add_task avec les infos,
+            # mais pour l'instant on se contente de la session.
+            # On peut aussi insérer dans la base avec statut "termine"
+            # pour avoir un historique complet.
+            db_manager.add_task(
+                agent_id=agent_id,
+                tache=tache,
+                match_info=entry["match"],
+                wf=entry["wf"],
+                ligue=entry["ligue"],
+                remarques=entry["remarques"],
+                statut="termine",
+                date_debut=start if start else datetime.now(MADA_TZ).isoformat(),
+                evenements=evenements
+            )
+        
+        return True, f"✅ Importation réussie : {nouvelles_taches} tâches importées depuis Google Sheets."
+    
+    except Exception as e:
+        return False, f"❌ Erreur lors de l'importation : {str(e)}"
+
 # --- CONFIGURATION DE L'APPLICATION ---
 st.set_page_config(page_title="Qwanteos-Setup Admin", layout="wide", page_icon="⚙️")
 
@@ -1585,8 +1727,9 @@ def page_operateur_dashboard():
         else:
             st.info("Aucune tâche dans l'historique.")
     
-    # --- EXPORT GOOGLE SHEETS (dans un expander) ---
-    with st.expander("Export vers Google Sheets", expanded=False):
+    # --- EXPORT / IMPORT GOOGLE SHEETS (dans un expander) ---
+    with st.expander("🔄 Import/Export Google Sheets", expanded=False):
+        # Récupération des données à exporter (comme avant)
         export_rows = []
         for tache, entries in st.session_state.taches_operateur.items():
             for entry in entries:
@@ -1618,21 +1761,42 @@ def page_operateur_dashboard():
         if export_rows:
             df_export = pd.DataFrame(export_rows)
             st.dataframe(df_export, use_container_width=True, hide_index=True)
-            if st.button("Exporter vers Google Sheets", type="primary", use_container_width=True):
-                try:
-                    SPREADSHEET_ID = st.secrets["google_sheets"]["spreadsheet_id"]
-                except:
-                    SPREADSHEET_ID = None
-                    st.error("❌ SPREADSHEET_ID non configuré dans les secrets.")
-                if SPREADSHEET_ID:
-                    success, msg = exporter_vers_google_sheets(st.session_state.user_actif, df_export, SPREADSHEET_ID)
-                    if success:
-                        st.success(msg)
-                        st.toast("Export effectué", icon="✅")
-                    else:
-                        st.error(msg)
+            
+            col_exp_btn1, col_exp_btn2 = st.columns(2)
+            with col_exp_btn1:
+                if st.button("📤 Exporter vers Google Sheets", type="primary", use_container_width=True):
+                    try:
+                        SPREADSHEET_ID = st.secrets["google_sheets"]["spreadsheet_id"]
+                    except:
+                        SPREADSHEET_ID = None
+                        st.error("❌ SPREADSHEET_ID non configuré dans les secrets.")
+                    if SPREADSHEET_ID:
+                        success, msg = exporter_vers_google_sheets(st.session_state.user_actif, df_export, SPREADSHEET_ID)
+                        if success:
+                            st.success(msg)
+                            st.toast("Export effectué", icon="✅")
+                        else:
+                            st.error(msg)
+            
+            with col_exp_btn2:
+                if st.button("📥 Importer depuis Google Sheets", type="secondary", use_container_width=True):
+                    try:
+                        SPREADSHEET_ID = st.secrets["google_sheets"]["spreadsheet_id"]
+                    except:
+                        SPREADSHEET_ID = None
+                        st.error("❌ SPREADSHEET_ID non configuré dans les secrets.")
+                    if SPREADSHEET_ID:
+                        with st.spinner("Importation en cours..."):
+                            success, msg = importer_depuis_google_sheets(st.session_state.user_actif, SPREADSHEET_ID)
+                            if success:
+                                st.success(msg)
+                                st.toast("Importation réussie", icon="✅")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error(msg)
         else:
-            st.info("Aucune donnée à exporter.")
+            st.info("Aucune donnée à exporter. Utilisez d'abord le chronomètre pour créer des tâches.")
 
 # --- PAGE RÉSUMÉ & PLANNING OPÉRATEUR ---
 def page_operateur_resume():
