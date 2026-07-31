@@ -1424,49 +1424,68 @@ def page_operateur_dashboard():
     else:
         st.info("Aucune tâche en cours. Démarrer une nouvelle tâche ci-dessus.")
     
-    # --- HISTORIQUE COMPLET ---
+    # --- CONSTRUCTION DU DATAFRAME D'EXPORT / HISTORIQUE (UNIQUE) ---
+    export_rows = []
+    for tache, entries in st.session_state.taches_operateur.items():
+        for entry in entries:
+            evenements = entry.get("evenements", [])
+            start_time = pause_time = reprise_time = fin_time = ""
+            for evt in evenements:
+                if evt["type"] == "START":
+                    start_time = evt["time"]
+                elif evt["type"] == "PAUSE":
+                    pause_time = evt["time"]
+                elif evt["type"] == "REPRISE":
+                    reprise_time = evt["time"]
+                elif evt["type"] == "FIN":
+                    fin_time = evt["time"]
+            export_rows.append({
+                "START": formater_datetime_iso(start_time),
+                "PAUSE": formater_datetime_iso(pause_time),
+                "REPRISE": formater_datetime_iso(reprise_time),
+                "FIN": formater_datetime_iso(fin_time),
+                "DATE": entry.get("date_debut", "").split(" ")[0] if entry.get("date_debut") else "",
+                "MATCH / WF": f"{entry.get('match', '')} / {entry.get('wf', '')}",
+                "LIGUE": entry.get("ligue", ""),
+                "TACHES": tache,
+                "STATUTS": entry.get("statut", "Terminé"),
+                "TOTAL": entry.get("temps_formate", ""),
+                "REMARQUES": entry.get("remarques", ""),
+                "SECONDS": entry.get("temps_secondes", 0)  # pour les calculs
+            })
+    
+    df_export = pd.DataFrame(export_rows) if export_rows else pd.DataFrame()
+    
+    # --- HISTORIQUE COMPLET (avec les mêmes colonnes que l'export) ---
     with st.expander("📊 Historique complet des tâches", expanded=False):
-        historique_data = []
-        for tache, entries in st.session_state.taches_operateur.items():
-            for entry in entries:
-                historique_data.append({
-                    "Date Début": entry.get("date_debut", "N/A"),
-                    "Date Fin": entry.get("date_fin", "N/A"),
-                    "Tâche": tache,
-                    "Temps": entry.get("temps_formate", "00:00:00"),
-                    "Temps (sec)": entry.get("temps_secondes", 0),
-                    "MATCH": entry.get("match", "N/A"),
-                    "WF": entry.get("wf", "N/A"),
-                    "LIGUE": entry.get("ligue", "N/A"),
-                    "REMARQUES": entry.get("remarques", "N/A"),
-                    "Statut": entry.get("statut", "Terminé")
-                })
-        
-        if historique_data:
-            df_historique = pd.DataFrame(historique_data)
+        if not df_export.empty:
+            # Métriques
             col_met_a, col_met_b, col_met_c, col_met_d = st.columns(4)
             with col_met_a:
-                st.metric("Total Tâches", len(historique_data))
+                st.metric("Total Tâches", len(df_export))
             with col_met_b:
-                total_temps = sum([entry.get("Temps (sec)", 0) for entry in historique_data])
+                total_temps = df_export["SECONDS"].sum() if "SECONDS" in df_export.columns else 0
                 st.metric("Temps Total", format_duration_hms(total_temps))
             with col_met_c:
-                if len(historique_data) > 0:
-                    temps_moyen = total_temps / len(historique_data)
+                if len(df_export) > 0:
+                    temps_moyen = total_temps / len(df_export) if "SECONDS" in df_export.columns else 0
                     st.metric("Temps Moyen", format_duration_hms(temps_moyen))
             with col_met_d:
-                types_counts = df_historique["Tâche"].value_counts()
+                types_counts = df_export["TACHES"].value_counts() if "TACHES" in df_export.columns else pd.Series()
                 if not types_counts.empty:
                     st.metric("Types de tâches", len(types_counts))
+            
+            # Affichage du tableau avec les mêmes colonnes que l'export
             st.dataframe(
-                df_historique[["Date Début", "Date Fin", "Tâche", "Temps", "MATCH", "WF", "LIGUE", "Statut"]],
+                df_export[["START", "PAUSE", "REPRISE", "FIN", "DATE", "MATCH / WF", "LIGUE", "TACHES", "STATUTS", "TOTAL", "REMARQUES"]],
                 use_container_width=True,
                 hide_index=True
             )
+            
             col_exp1, col_exp2, col_exp3 = st.columns(3)
             with col_exp1:
                 if st.button("Exporter CSV", use_container_width=True):
-                    csv = df_historique.to_csv(index=False, encoding='utf-8-sig')
+                    csv = df_export.to_csv(index=False, encoding='utf-8-sig')
                     st.download_button(
                         label="📥 Télécharger",
                         data=csv,
@@ -1492,63 +1511,36 @@ def page_operateur_dashboard():
                     st.rerun()
             with col_exp3:
                 if st.button("📊 Voir graphiques", use_container_width=True):
-                    fig = px.pie(
-                        df_historique,
-                        names="Tâche",
-                        title="Répartition des tâches",
-                        color_discrete_sequence=px.colors.qualitative.Set3
-                    )
-                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff')
-                    st.plotly_chart(fig, use_container_width=True)
-                    df_temps = df_historique.groupby("Tâche")["Temps (sec)"].sum().reset_index()
-                    fig2 = px.bar(
-                        df_temps,
-                        x="Tâche",
-                        y="Temps (sec)",
-                        title="Temps total par type",
-                        color="Tâche",
-                        labels={"Temps (sec)": "Temps (secondes)"}
-                    )
-                    fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff',
-                                      xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
-                                      yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
-                    st.plotly_chart(fig2, use_container_width=True)
+                    if not df_export.empty:
+                        fig = px.pie(
+                            df_export,
+                            names="TACHES",
+                            title="Répartition des tâches",
+                            color_discrete_sequence=px.colors.qualitative.Set3
+                        )
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff')
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        df_temps = df_export.groupby("TACHES")["SECONDS"].sum().reset_index()
+                        fig2 = px.bar(
+                            df_temps,
+                            x="TACHES",
+                            y="SECONDS",
+                            title="Temps total par type",
+                            color="TACHES",
+                            labels={"SECONDS": "Temps (secondes)"}
+                        )
+                        fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#d0e4ff',
+                                          xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+                                          yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
+                        st.plotly_chart(fig2, use_container_width=True)
         else:
             st.info("Aucune tâche dans l'historique.")
     
-    # --- EXPORT / IMPORT GOOGLE SHEETS ---
+    # --- EXPORT / IMPORT GOOGLE SHEETS (réutilisation du même df_export) ---
     with st.expander("🔄 Import/Export Google Sheets", expanded=False):
-        export_rows = []
-        for tache, entries in st.session_state.taches_operateur.items():
-            for entry in entries:
-                evenements = entry.get("evenements", [])
-                start_time = pause_time = reprise_time = fin_time = ""
-                for evt in evenements:
-                    if evt["type"] == "START":
-                        start_time = evt["time"]
-                    elif evt["type"] == "PAUSE":
-                        pause_time = evt["time"]
-                    elif evt["type"] == "REPRISE":
-                        reprise_time = evt["time"]
-                    elif evt["type"] == "FIN":
-                        fin_time = evt["time"]
-                export_rows.append({
-                    "START": formater_datetime_iso(start_time),
-                    "PAUSE": formater_datetime_iso(pause_time),
-                    "REPRISE": formater_datetime_iso(reprise_time),
-                    "FIN": formater_datetime_iso(fin_time),
-                    "DATE": entry.get("date_debut", "").split(" ")[0] if entry.get("date_debut") else "",
-                    "MATCH / WF": f"{entry.get('match', '')} / {entry.get('wf', '')}",
-                    "LIGUE": entry.get("ligue", ""),
-                    "TACHES": tache,
-                    "STATUTS": entry.get("statut", "Terminé"),
-                    "TOTAL": entry.get("temps_formate", ""),
-                    "REMARQUES": entry.get("remarques", "")
-                })
-        
-        if export_rows:
-            df_export = pd.DataFrame(export_rows)
-            st.dataframe(df_export, use_container_width=True, hide_index=True)
+        if not df_export.empty:
+            st.dataframe(df_export[["START", "PAUSE", "REPRISE", "FIN", "DATE", "MATCH / WF", "LIGUE", "TACHES", "STATUTS", "TOTAL", "REMARQUES"]], use_container_width=True, hide_index=True)
             col_exp_btn1, col_exp_btn2 = st.columns(2)
             with col_exp_btn1:
                 if st.button("📤 Exporter vers Google Sheets", type="primary", use_container_width=True):
