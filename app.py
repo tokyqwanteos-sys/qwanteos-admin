@@ -2270,6 +2270,7 @@ def page_operateur_shared_tasks():
         else:
             st.info("Aucun agent trouvé.")
 
+# ==================== PAGE GESTION COMPTES ADMIN (MODIFIÉE) ====================
 def page_gestion_comptes():
     check_inactivity()
     st.title("👤 Gestion des Comptes & Tâches")
@@ -2478,6 +2479,18 @@ def page_gestion_comptes():
         st.markdown("---")
         display_data = []
         for task in all_tasks:
+            # Extraire les événements
+            evenements = json.loads(task.get("evenements", "[]"))
+            start_time = pause_time = reprise_time = fin_time = ""
+            for evt in evenements:
+                if evt["type"] == "START":
+                    start_time = evt["time"]
+                elif evt["type"] == "PAUSE":
+                    pause_time = evt["time"]
+                elif evt["type"] == "REPRISE":
+                    reprise_time = evt["time"]
+                elif evt["type"] == "FIN":
+                    fin_time = evt["time"]
             display_data.append({
                 "ID": task["id"],
                 "Agent": task.get("agent_nom", "N/A"),
@@ -2487,6 +2500,10 @@ def page_gestion_comptes():
                 "Ligue": task.get("ligue", ""),
                 "Remarques": task.get("remarques", ""),
                 "Statut": task.get("statut", ""),
+                "START": formater_datetime_iso(start_time),
+                "PAUSE": formater_datetime_iso(pause_time),
+                "REPRISE": formater_datetime_iso(reprise_time),
+                "FIN": formater_datetime_iso(fin_time),
                 "Date début": task.get("date_debut", ""),
                 "Date fin": task.get("date_fin", ""),
                 "Temps": task.get("temps_formate", "00:00:00"),
@@ -2510,6 +2527,10 @@ def page_gestion_comptes():
                     options=["en_cours", "pause", "termine"],
                     disabled=False
                 ),
+                "START": st.column_config.TextColumn("START", disabled=True),
+                "PAUSE": st.column_config.TextColumn("PAUSE", disabled=True),
+                "REPRISE": st.column_config.TextColumn("REPRISE", disabled=True),
+                "FIN": st.column_config.TextColumn("FIN", disabled=True),
                 "Date début": st.column_config.TextColumn("Date début (ISO)", disabled=False, help="Format ISO: YYYY-MM-DDTHH:MM:SS"),
                 "Date fin": st.column_config.TextColumn("Date fin (ISO)", disabled=False, help="Format ISO: YYYY-MM-DDTHH:MM:SS"),
                 "Temps": st.column_config.TextColumn("Temps", disabled=True),
