@@ -23,7 +23,6 @@ import db_manager
 
 from sauvegarde_manager import gestionnaire_sauvegarde
 
-# ==================== CONSTANTES ET FUSEAU HORAIRE ====================
 MADA_TZ = ZoneInfo("Indian/Antananarivo")
 
 TACHES_DISPONIBLES = [
@@ -32,7 +31,6 @@ TACHES_DISPONIBLES = [
     "CHECK", "PREPARATION", "FICHIER", "SCOUTING"
 ]
 
-# ==================== BASE DE DONNÉES ====================
 db_manager.init_db()
 
 def init_shared_tasks_table():
@@ -172,13 +170,7 @@ def migrer_donnees():
         db_manager.add_cloud_data(row)
     print("Migration terminée.")
 
-# ==================== FONCTIONS DE FORMATAGE (RÈGLE ABSOLUE) ====================
 def formater_datetime_iso(iso_str):
-    """
-    Convertit une chaîne ISO (ex: '2026-07-31T17:30:13+03:00') en format
-    '31/07/2026 17:30:13' (jour/mois/année heure:minute:seconde).
-    Si la chaîne est invalide, retourne la chaîne d'origine.
-    """
     if not iso_str:
         return ""
     try:
@@ -190,9 +182,6 @@ def formater_datetime_iso(iso_str):
         return iso_str
 
 def format_duration_hms(seconds):
-    """
-    Convertit un nombre de secondes (float) en chaîne 'hh:mm:ss' (signe négatif possible).
-    """
     if seconds is None or pd.isna(seconds):
         return "00:00:00"
     signe = "-" if seconds < 0 else ""
@@ -202,27 +191,6 @@ def format_duration_hms(seconds):
     s = int(seconds % 60)
     return f"{signe}{h:02d}:{m:02d}:{s:02d}"
 
-def parse_datetime_fr(date_str):
-    """
-    Parse une chaîne au format '31/07/2026 17:30:13' en objet datetime (avec fuseau MADA).
-    Retourne None si échec.
-    """
-    if not date_str or date_str == "N/A":
-        return None
-    try:
-        dt = datetime.strptime(date_str, "%d/%m/%Y %H:%M:%S")
-        dt = dt.replace(tzinfo=MADA_TZ)
-        return dt
-    except ValueError:
-        try:
-            # Essayer sans heure
-            dt = datetime.strptime(date_str, "%d/%m/%Y")
-            dt = dt.replace(tzinfo=MADA_TZ)
-            return dt
-        except ValueError:
-            return None
-
-# ==================== FONCTIONS UTILISATEURS ====================
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -343,7 +311,6 @@ def get_user_role(username):
 def check_inactivity():
     pass
 
-# ==================== GOOGLE SHEETS ====================
 def get_google_sheet_client():
     try:
         creds_dict = {
@@ -515,10 +482,8 @@ def importer_depuis_google_sheets(utilisateur, spreadsheet_id):
     except Exception as e:
         return False, f"❌ Erreur lors de l'importation : {str(e)}"
 
-# ==================== CONFIGURATION PAGE ====================
 st.set_page_config(page_title="Qwanteos-Setup Admin", layout="wide", page_icon="⚙️")
 
-# ==================== CSS ====================
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -941,7 +906,6 @@ st.markdown("""
     <div class="grid-lines"></div>
 """, unsafe_allow_html=True)
 
-# ==================== SESSION STATE ====================
 if "authentifie" not in st.session_state:
     st.session_state.authentifie = False
 if "user_actif" not in st.session_state:
@@ -953,7 +917,6 @@ if "user_changed" not in st.session_state:
 if "chat_message_text" not in st.session_state:
     st.session_state.chat_message_text = ""
 
-# ==================== FONCTIONS CHAT ====================
 def send_chat_message(username, full_name, message, attachment_base64=None):
     conn = db_manager.get_db()
     c = conn.cursor()
@@ -1039,7 +1002,7 @@ if "task_id_counter" not in st.session_state:
 if "show_completed_tasks" not in st.session_state:
     st.session_state.show_completed_tasks = True
 
-# ==================== PAGE CONNEXION ====================
+# --- INTERFACE DE CONNEXION ---
 if not st.session_state.authentifie:
     st.markdown("""
         <div class="welcome-container">
@@ -1135,7 +1098,7 @@ if not st.session_state.authentifie:
             st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# ==================== PAGE OPÉRATEUR DASHBOARD (CHRONO) ====================
+# ==================== PAGE OPÉRATEUR DASHBOARD AVEC CHARGEMENT DES DONNÉES ====================
 def page_operateur_dashboard():
     st.title("⏱️ Suivi des Tâches")
     
@@ -1153,7 +1116,7 @@ def page_operateur_dashboard():
         </div>
     """, unsafe_allow_html=True)
 
-    # Récupération de l'agent_id
+    # --- Récupération de l'agent_id ---
     agents_db = db_manager.get_all_agents()
     agent_id = None
     for ag in agents_db:
@@ -1164,16 +1127,23 @@ def page_operateur_dashboard():
         st.error("❌ Compte non lié à un agent. Contactez l'admin.")
         return
 
-    # Chargement des tâches depuis la DB si nécessaire
+    # --- Chargement des tâches depuis la base si l'utilisateur a changé ou si les données sont vides ---
     user_key = f"loaded_user_{st.session_state.user_actif}"
     if st.session_state.get(user_key, False) is False:
+        # Charger toutes les tâches de l'agent
         tasks_from_db = db_manager.get_tasks_by_agent(agent_id)
+        
+        # Initialiser les structures
         taches_operateur = {}
         taches_en_cours = []
+        
+        # Séparer les tâches terminées et en cours
         for task in tasks_from_db:
             statut = task.get("statut")
             evenements = json.loads(task.get("evenements", "[]"))
+            
             if statut == "termine":
+                # Historique
                 tache = task.get("tache")
                 if tache not in taches_operateur:
                     taches_operateur[tache] = []
@@ -1204,18 +1174,21 @@ def page_operateur_dashboard():
                     "statut": statut,
                     "start_time": task.get("date_debut"),
                     "elapsed_seconds": elapsed_seconds,
-                    "last_start": time.time(),  # initialisé à maintenant
+                    "last_start": time.time(),  # on redémarre le chrono à maintenant
                     "evenements": evenements,
                     "date_debut": formater_datetime_iso(task.get("date_debut")),
                     "temps_total_secondes": elapsed_seconds,
                     "temps_formate": task.get("temps_formate", "00:00:00")
                 }
                 taches_en_cours.append(new_task)
+        
+        # Mettre à jour la session
         st.session_state.taches_operateur = taches_operateur
         st.session_state.taches_en_cours = taches_en_cours
+        # Marquer comme chargé
         st.session_state[user_key] = True
 
-    # Tâches assignées (shared_tasks)
+    # --- AFFICHAGE DES TÂCHES ASSIGNÉES (shared_tasks) ---
     with st.expander("📋 Mes tâches assignées", expanded=False):
         agent_name = st.session_state.user_actif
         mes_taches = get_tasks_for_agent(agent_name)
@@ -1228,12 +1201,14 @@ def page_operateur_dashboard():
         else:
             st.info("Aucune tâche assignée pour le moment.")
     
-    # Nouvelle tâche
+    # --- SECTION NOUVELLE TÂCHE ---
     st.markdown("### Nouvelle tâche")
     with st.container():
         col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
         with col1:
-            tache_selectionnee = st.selectbox("Type", options=TACHES_DISPONIBLES, key="new_task_select")
+            tache_selectionnee = st.selectbox(
+                "Type", options=TACHES_DISPONIBLES, key="new_task_select"
+            )
         with col2:
             match_info = st.text_input("Match", placeholder="vs", key="match_new")
         with col3:
@@ -1287,7 +1262,7 @@ def page_operateur_dashboard():
     
     st.markdown("---")
     
-    # Tâches en cours
+    # --- TÂCHES EN COURS (affichage) ---
     st.markdown("### 📋 Tâches en cours")
     if st.session_state.taches_en_cours:
         taches_actives = [t for t in st.session_state.taches_en_cours if t["statut"] != "termine"]
@@ -1304,13 +1279,15 @@ def page_operateur_dashboard():
         if taches_actives:
             st.markdown("#### En cours")
             for task in taches_actives:
-                # Calcul du temps écoulé
                 if task["statut"] == "en_cours":
                     elapsed = task["elapsed_seconds"] + (time.time() - task["last_start"])
                 else:
                     elapsed = task["elapsed_seconds"]
                 
-                time_str = format_duration_hms(elapsed)
+                h = int(elapsed // 3600)
+                m = int((elapsed % 3600) // 60)
+                s = int(elapsed % 60)
+                time_str = f"{h:02d}:{m:02d}:{s:02d}"
                 
                 if task["statut"] == "en_cours":
                     status_class = "running"
@@ -1344,9 +1321,8 @@ def page_operateur_dashboard():
                         with col_btn_pause:
                             if task["statut"] == "en_cours":
                                 if st.button("⏸️", key=f"pause_{task['id']}", help="Pause"):
-                                    # Ajouter le temps écoulé depuis le dernier start
-                                    task["elapsed_seconds"] += time.time() - task["last_start"]
                                     task["statut"] = "pause"
+                                    task["elapsed_seconds"] += time.time() - task["last_start"]
                                     task["evenements"].append({"type": "PAUSE", "time": datetime.now(MADA_TZ).isoformat()})
                                     db_manager.update_task(task["db_id"], statut="pause", evenements=task["evenements"])
                                     st.toast(f"⏸️ {task['tache']} en pause", icon="⏸️")
@@ -1396,7 +1372,7 @@ def page_operateur_dashboard():
                                 st.toast(f"✅ {task['tache']} terminée ({task['temps_formate']})", icon="✅")
                                 st.rerun()
                     
-                    # Remarques
+                    # Gestion des remarques
                     with st.container():
                         col_remarque, col_btn_remarque = st.columns([4, 1])
                         with col_remarque:
@@ -1448,7 +1424,7 @@ def page_operateur_dashboard():
     else:
         st.info("Aucune tâche en cours. Démarrer une nouvelle tâche ci-dessus.")
     
-    # Historique complet
+    # --- HISTORIQUE COMPLET ---
     with st.expander("📊 Historique complet des tâches", expanded=False):
         historique_data = []
         for tache, entries in st.session_state.taches_operateur.items():
@@ -1540,7 +1516,7 @@ def page_operateur_dashboard():
         else:
             st.info("Aucune tâche dans l'historique.")
     
-    # Export / Import Google Sheets
+    # --- EXPORT / IMPORT GOOGLE SHEETS ---
     with st.expander("🔄 Import/Export Google Sheets", expanded=False):
         export_rows = []
         for tache, entries in st.session_state.taches_operateur.items():
@@ -1608,7 +1584,7 @@ def page_operateur_dashboard():
         else:
             st.info("Aucune donnée à exporter. Utilisez d'abord le chronomètre pour créer des tâches.")
 
-# ==================== PAGE OPÉRATEUR RÉSUMÉ ====================
+# --- Autres pages (inchangées) ---
 def page_operateur_resume():
     st.title("📊 Résumé & Planning")
     st.markdown(f"""
@@ -1793,7 +1769,6 @@ def page_operateur_resume():
             {', '.join([a['nom'] for a in agents_db])}
         """)
 
-# ==================== FONCTIONS CALCUL NUIT ====================
 def calculer_temps_nuit(dt_debut, dt_fin):
     if dt_debut is None or dt_fin is None:
         return 0
@@ -1816,7 +1791,7 @@ def calculer_temps_nuit(dt_debut, dt_fin):
         current = next_min
     return total_nuit
 
-# ==================== PAGE STATISTIQUES ====================
+# ============ PAGE STATISTIQUES & ANALYSES (MISE À JOUR) ============
 def page_operateur_stats():
     st.title("📊 Statistiques & Analyses")
     st.markdown(f"""
@@ -1860,21 +1835,24 @@ def page_operateur_stats():
         st.info("Aucune donnée à afficher.")
         return
 
-    # Parsing des dates
+    # Fonction de parsing robuste
     def parse_date(date_str):
         if not date_str or date_str == "N/A":
             return None
         try:
+            # Format complet avec heure
             dt = datetime.strptime(date_str, "%d/%m/%Y %H:%M:%S")
             dt = dt.replace(tzinfo=MADA_TZ)
             return dt
         except ValueError:
             try:
+                # Format sans heure
                 dt = datetime.strptime(date_str, "%d/%m/%Y")
                 dt = dt.replace(tzinfo=MADA_TZ)
                 return dt
             except ValueError:
                 try:
+                    # Autres formats via pandas
                     dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
                     if pd.isna(dt):
                         return None
@@ -1891,7 +1869,7 @@ def page_operateur_stats():
         st.warning("Aucune tâche avec des dates valides.")
         return
 
-    # Calcul nuit
+    # Calcul du temps de nuit (22h-5h)
     df["temps_nuit_sec"] = df.apply(
         lambda row: calculer_temps_nuit(row["date_debut_dt"], row["date_fin_dt"]),
         axis=1
@@ -1900,7 +1878,7 @@ def page_operateur_stats():
     df["temps_nuit_formate"] = df["temps_nuit_sec"].apply(format_duration_hms)
     df["temps_jour_formate"] = df["temps_jour_sec"].apply(format_duration_hms)
 
-    # Filtres dans sidebar
+    # Filtres dans la sidebar
     st.sidebar.markdown("---")
     st.sidebar.subheader("📅 Filtres")
     date_min = df["date_debut_dt"].min().date()
@@ -1911,6 +1889,7 @@ def page_operateur_stats():
     with col_filtre2:
         date_fin_filtre = st.date_input("Date fin", value=date_max, min_value=date_min, max_value=date_max, key="stats_date_fin")
 
+    # Filtre par type de tâche
     types_possibles = sorted(df["tache"].unique())
     type_choisi = st.sidebar.selectbox("Type de tâche", options=["Tous"] + types_possibles, index=0)
 
@@ -1923,6 +1902,7 @@ def page_operateur_stats():
         st.warning("Aucune donnée pour la période sélectionnée.")
         return
 
+    # Métriques globales
     total_taches = len(df_filtre)
     total_temps_sec = df_filtre["temps_secondes"].sum()
     moyenne_sec = df_filtre["temps_secondes"].mean() if total_taches > 0 else 0
@@ -1939,6 +1919,8 @@ def page_operateur_stats():
     col6.metric("🔻 Min", format_duration_hms(min_sec))
 
     st.markdown("---")
+
+    # Analyse Nuit / Jour
     st.subheader("🌙 Analyse Nuit / Jour")
     total_nuit_sec = df_filtre["temps_nuit_sec"].sum()
     total_jour_sec = df_filtre["temps_jour_sec"].sum()
@@ -1963,6 +1945,8 @@ def page_operateur_stats():
         st.info("Aucune donnée pour l'analyse Nuit/Jour.")
 
     st.markdown("---")
+
+    # Graphiques
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         fig_pie = px.pie(
@@ -1991,6 +1975,8 @@ def page_operateur_stats():
         st.plotly_chart(fig_bar, use_container_width=True)
 
     st.markdown("---")
+
+    # Performances par type de tâche
     st.subheader("📋 Performances par type de tâche")
     df_type = df_filtre.groupby("tache").agg(
         nombre=("tache", "count"),
@@ -2025,6 +2011,8 @@ def page_operateur_stats():
     )
 
     st.markdown("---")
+
+    # Performance quotidienne
     st.subheader("📅 Performance quotidienne")
     df_perf_jour = df_filtre.groupby(df_filtre["date_debut_dt"].dt.date).agg(
         nb_taches=("tache", "count"),
@@ -2053,6 +2041,7 @@ def page_operateur_stats():
         }
     )
 
+    # Graphique d'évolution
     fig_line = px.line(
         df_perf_jour,
         x="jour_str",
@@ -2066,7 +2055,8 @@ def page_operateur_stats():
                            yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
     st.plotly_chart(fig_line, use_container_width=True)
 
-# ==================== PAGE CHAT ====================
+# ============ FIN PAGE STATISTIQUES ============
+
 def page_chat():
     st.title("💬 Chat Interne")
     st.markdown(f"""
@@ -2172,7 +2162,6 @@ def page_chat():
             else:
                 st.warning("⚠️ Veuillez écrire un message ou ajouter une photo.")
 
-# ==================== PAGE OPÉRATEUR TÂCHES PARTAGÉES ====================
 def page_operateur_shared_tasks():
     st.title("Répartition des Tâches")
     st.markdown(f"""
@@ -2197,7 +2186,11 @@ def page_operateur_shared_tasks():
     with st.expander("➕ Ajouter une nouvelle tâche", expanded=False):
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            new_tache = st.selectbox("Tâche", options=TACHES_DISPONIBLES, key="new_tache_select")
+            new_tache = st.selectbox(
+                "Tâche",
+                options=TACHES_DISPONIBLES,
+                key="new_tache_select"
+            )
         with col2:
             new_match = st.text_input("Match", placeholder="vs")
         with col3:
@@ -2285,7 +2278,6 @@ def page_operateur_shared_tasks():
         else:
             st.info("Aucun agent trouvé.")
 
-# ==================== PAGE GESTION COMPTES ADMIN ====================
 def page_gestion_comptes():
     check_inactivity()
     st.title("👤 Gestion des Comptes & Tâches")
@@ -2628,7 +2620,7 @@ def page_gestion_comptes():
                 mime="text/csv"
             )
 
-# ==================== BARRE LATÉRALE ====================
+# --- BARRE LATÉRALE ---
 with st.sidebar:
     role_emoji = {"operateur": "▸", "admin": "▸"}
     role_label = {"operateur": "Opérateur", "admin": "Administrateur"}
@@ -2726,7 +2718,6 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
 
-# ==================== FONCTIONS CALCUL HEURES NUIT (POINTAGE) ====================
 def calculer_heures_nuit(dt_e, dt_s, dt_dp=None, dt_fp=None):
     total_nuit = 0.0
     courant = dt_e
@@ -2860,7 +2851,6 @@ def convertir_temps_en_heures(val_str):
     except Exception:
         return 0.0
 
-# ==================== FONCTIONS STATS AGENTS ====================
 def calculer_stats_agent(donnees_cloud, nom_agent, date_debut=None, date_fin=None):
     if not donnees_cloud:
         return None
@@ -2920,7 +2910,6 @@ def calculer_stats_tous_agents(donnees_cloud, date_debut=None, date_fin=None):
             stats_tous[agent] = stats
     return stats_tous
 
-# ==================== PAGE GESTION AGENTS ADMIN ====================
 def page_gestion_agents():
     check_inactivity()
     st.title("👥 Gestion du Personnel")
@@ -3097,7 +3086,6 @@ def page_gestion_agents():
             st.toast("🗑️ Agent supprimé ! Tous les admins verront ce changement.", icon="🗑️")
             st.rerun()
 
-# ==================== PAGE PLANNING ADMIN ====================
 def page_planning():
     check_inactivity()
     st.title("🗓️ Planning Hebdomadaire")
@@ -3236,7 +3224,6 @@ def page_planning():
             st.toast("✅ Statut mis à jour ! Tous les admins verront ce changement.", icon="📋")
             st.rerun()
 
-# ==================== PAGE SUIVI HEURES ADMIN ====================
 def page_suivi_heures():
     check_inactivity()
     st.title("⏱️ Suivi des Heures de Production")
@@ -3606,7 +3593,6 @@ def page_suivi_heures():
             col_m2.metric("⏱️ Total Heures Mois", format_duration_hms(total_heures_mois * 3600))
             col_m3.metric("🌙 Total Heures Nuit", format_duration_hms(total_nuit_mois * 3600))
 
-# ==================== PAGE SYNCHRONISATION CLOUD ADMIN ====================
 def page_synchronisation_cloud():
     check_inactivity()
     st.title("🌐 Analyse & Importation Multi-Feuilles Google Sheets")
@@ -3846,7 +3832,6 @@ def page_synchronisation_cloud():
                 time.sleep(0.5)
                 st.rerun()
 
-# ==================== NAVIGATION ====================
 if st.query_params.get("page") == ["chat"]:
     page_chat()
 else:
