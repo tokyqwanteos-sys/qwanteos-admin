@@ -191,6 +191,63 @@ def format_duration_hms(seconds):
     s = int(seconds % 60)
     return f"{signe}{h:02d}:{m:02d}:{s:02d}"
 
+# ---- AJOUT : fonction de recalcule du temps total ----
+def recalculer_temps_total(evenements, statut, date_debut_iso):
+    """
+    Recalcule le temps total de travail (en secondes) depuis le début de la tâche
+    jusqu'à maintenant, en tenant compte des pauses et du statut actuel.
+    """
+    if not evenements:
+        return 0.0
+
+    # Trier les événements par date
+    evenements_tries = sorted(evenements, key=lambda e: e["time"])
+    
+    # Date de début de la tâche (si non fournie via événement, on utilise date_debut_iso)
+    try:
+        debut = datetime.fromisoformat(date_debut_iso)
+    except:
+        debut = datetime.now(MADA_TZ)
+    if debut.tzinfo is None:
+        debut = debut.replace(tzinfo=MADA_TZ)
+
+    total_travail = 0.0
+    derniere_action = debut
+    en_travail = False
+
+    for evt in evenements_tries:
+        try:
+            t = datetime.fromisoformat(evt["time"])
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=MADA_TZ)
+        except:
+            continue
+
+        if evt["type"] == "START":
+            en_travail = True
+            derniere_action = t
+        elif evt["type"] == "PAUSE":
+            if en_travail:
+                total_travail += (t - derniere_action).total_seconds()
+                en_travail = False
+            derniere_action = t
+        elif evt["type"] == "REPRISE":
+            en_travail = True
+            derniere_action = t
+        elif evt["type"] == "FIN":
+            if en_travail:
+                total_travail += (t - derniere_action).total_seconds()
+                en_travail = False
+            derniere_action = t
+
+    # Si la tâche est en cours, ajouter le temps depuis le dernier événement
+    if statut == "en_cours" and en_travail:
+        maintenant = datetime.now(MADA_TZ)
+        total_travail += (maintenant - derniere_action).total_seconds()
+
+    return total_travail
+# ---- FIN AJOUT ----
+
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -1141,6 +1198,7 @@ def page_operateur_dashboard():
         for task in tasks_from_db:
             statut = task.get("statut")
             evenements = json.loads(task.get("evenements", "[]"))
+            date_debut = task.get("date_debut")
             
             if statut == "termine":
                 # Historique
@@ -1161,8 +1219,9 @@ def page_operateur_dashboard():
                     "evenements": evenements
                 })
             else:
-                # Tâche en cours ou en pause
-                elapsed_seconds = task.get("temps_total_secondes", 0)
+                # Tâche en cours ou en pause : on recalcule le temps total jusqu'à maintenant
+                temps_recalcule = recalculer_temps_total(evenements, statut, date_debut)
+                
                 new_task = {
                     "id": task["id"],
                     "db_id": task["id"],
@@ -1172,13 +1231,13 @@ def page_operateur_dashboard():
                     "ligue": task.get("ligue", ""),
                     "remarques": task.get("remarques", ""),
                     "statut": statut,
-                    "start_time": task.get("date_debut"),
-                    "elapsed_seconds": elapsed_seconds,
-                    "last_start": time.time(),  # on redémarre le chrono à maintenant
+                    "start_time": date_debut,
+                    "elapsed_seconds": temps_recalcule,
+                    "last_start": time.time(),
                     "evenements": evenements,
-                    "date_debut": formater_datetime_iso(task.get("date_debut")),
-                    "temps_total_secondes": elapsed_seconds,
-                    "temps_formate": task.get("temps_formate", "00:00:00")
+                    "date_debut": formater_datetime_iso(date_debut),
+                    "temps_total_secondes": temps_recalcule,
+                    "temps_formate": format_duration_hms(temps_recalcule)
                 }
                 taches_en_cours.append(new_task)
         
