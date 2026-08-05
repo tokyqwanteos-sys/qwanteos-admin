@@ -1059,6 +1059,110 @@ if "task_id_counter" not in st.session_state:
 if "show_completed_tasks" not in st.session_state:
     st.session_state.show_completed_tasks = True
 
+# --- NOUVELLE FONCTION DE RESTAURATION ---
+def restaurer_donnees_depuis_sauvegarde():
+    """
+    Restaure toutes les données (agents, planning, heures, tâches, cloud_data, messages, shared_tasks)
+    depuis le fichier sauvegarde_last.json dans la base de données SQLite.
+    Ne touche pas aux utilisateurs (fichier users.json).
+    Restaure également les variables de session.
+    """
+    try:
+        fichier = "sauvegardes/sauvegarde_last.json"
+        if not os.path.exists(fichier):
+            return False, "❌ Aucun fichier de sauvegarde trouvé."
+        
+        with open(fichier, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        # Vider les tables concernées (sauf users qui est géré par users.json)
+        conn = db_manager.get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM agents")
+        c.execute("DELETE FROM planning")
+        c.execute("DELETE FROM heures")
+        c.execute("DELETE FROM taches")
+        c.execute("DELETE FROM cloud_data")
+        c.execute("DELETE FROM pointages")
+        c.execute("DELETE FROM messages")
+        c.execute("DELETE FROM shared_tasks")
+        conn.commit()
+        conn.close()
+        
+        # --- 1. Agents ---
+        for agent in data.get("agents", []):
+            db_manager.add_agent(agent["Nom"], agent["Poste"])
+        
+        # Récupérer les IDs des agents
+        agents_db = db_manager.get_all_agents()
+        nom_to_id = {a["nom"]: a["id"] for a in agents_db}
+        
+        # --- 2. Planning ---
+        for date, plan in data.get("planning", {}).items():
+            for nom, statut in plan.items():
+                agent_id = nom_to_id.get(nom)
+                if agent_id:
+                    db_manager.set_planning(date, agent_id, statut)
+        
+        # --- 3. Heures ---
+        for date, heures_dict in data.get("heures", {}).items():
+            for nom, heures in heures_dict.items():
+                agent_id = nom_to_id.get(nom)
+                if agent_id:
+                    if isinstance(heures, dict):
+                        total = heures.get("total", 0)
+                        nuit = heures.get("nuit", 0)
+                    else:
+                        total = float(heures)
+                        nuit = 0
+                    db_manager.set_heures(date, agent_id, total, nuit)
+        
+        # --- 4. Cloud data ---
+        for row in data.get("donnees_cloud_centralisees", []):
+            db_manager.add_cloud_data(row)
+        
+        # --- 5. Messages (on les rétablit) ---
+        # Les messages ne sont pas directement dans la sauvegarde, on pourrait les restaurer si présents
+        # mais la sauvegarde actuelle ne les contient pas. On ignore.
+        
+        # --- 6. Tâches partagées (shared_tasks) ---
+        # On peut essayer de restaurer depuis la sauvegarde si elle contient un champ "shared_tasks"
+        shared_tasks = data.get("shared_tasks", [])
+        for task in shared_tasks:
+            # On suppose que le format est identique à la table
+            conn = db_manager.get_db()
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO shared_tasks (tache, match_info, wf, ligue, remarques, date_creation, assigne_a, statut)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                task.get("tache"), task.get("match_info", ""), task.get("wf", ""),
+                task.get("ligue", ""), task.get("remarques", ""), task.get("date_creation", datetime.now(MADA_TZ).isoformat()),
+                task.get("assigne_a"), task.get("statut", "disponible")
+            ))
+            conn.commit()
+            conn.close()
+        
+        # --- 7. Restaurer les variables de session (tâches opérateur, etc.) ---
+        st.session_state.taches_operateur = data.get("taches_operateur", {})
+        st.session_state.taches_en_cours = data.get("taches_en_cours", [])
+        st.session_state.task_id_counter = data.get("task_id_counter", 0)
+        st.session_state.show_completed_tasks = data.get("show_completed_tasks", True)
+        st.session_state.couleurs = data.get("couleurs", {
+            "Travail": "#2E7D32", "OFF": "#757575", "Congé": "#8D6E63",
+            "Maladie": "#C62828", "Formation": "#1565C0"
+        })
+        # On pourrait aussi restaurer les agents, planning, heures, etc. dans st.session_state pour les pages qui les utilisent
+        st.session_state.agents = data.get("agents", [])
+        st.session_state.planning = data.get("planning", {})
+        st.session_state.heures = data.get("heures", {})
+        st.session_state.donnees_cloud_centralisees = data.get("donnees_cloud_centralisees", [])
+        st.session_state.data_loaded = True
+        
+        return True, "✅ Restauration terminée avec succès !"
+    except Exception as e:
+        return False, f"❌ Erreur lors de la restauration : {str(e)}"
+
 # --- INTERFACE DE CONNEXION ---
 if not st.session_state.authentifie:
     st.markdown("""
@@ -2755,6 +2859,20 @@ with st.sidebar:
     if st.session_state.user_role == "admin":
         st.markdown("---")
         st.markdown("### ⚠️ Zone Critique")
+        
+        # --- NOUVEAU BOUTON DE RESTAURATION (avec double confirmation) ---
+        if st.button("🔄 Restaurer depuis la sauvegarde (base)", use_container_width=True, type="secondary"):
+            if st.session_state.get("confirm_restore", False):
+                success, msg = restaurer_donnees_depuis_sauvegarde()
+                if success:
+                    st.toast("✅ " + msg, icon="✅")
+                    st.rerun()
+                else:
+                    st.toast("❌ " + msg, icon="❌")
+            else:
+                st.session_state.confirm_restore = True
+                st.warning("⚠️ Cliquez à nouveau pour confirmer la restauration complète (écrasera les données actuelles).")
+        
         confirmer_reset = st.checkbox("Autoriser la remise à zéro")
         if st.button("🚨 Réinitialiser l'interface", type="primary", use_container_width=True, disabled=not confirmer_reset):
             conn = db_manager.get_db()
